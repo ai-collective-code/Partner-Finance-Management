@@ -19,9 +19,9 @@ export default function AuthSync({ children }) {
         try {
           isSyncingRef.current = true;
           const token = await getToken();
-          
           // 1. Sync user to backend DB (insert if new, preserve existing role)
-          const syncRes = await fetch('/api/sync-user', {
+          const API_BASE_URL = process.env.REACT_APP_API_URL || '';
+          const syncRes = await fetch(`${API_BASE_URL}/api/sync-user`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',

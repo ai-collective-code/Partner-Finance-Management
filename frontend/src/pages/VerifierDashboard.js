@@ -8,7 +8,10 @@ import {
   CheckCircle, Cancel, Visibility, AttachMoney, Person, Schedule, VerifiedUser
 } from '@mui/icons-material';
 import { useApi } from '../hooks/useApi';
+
 import { useSelector } from 'react-redux';
+
+const API_BASE_URL = process.env.REACT_APP_API_URL || '';
 
 const STATUS_FLOW = ['PND', 'VRF', 'FIN', 'OWN', 'DSB'];
 
@@ -231,7 +234,7 @@ const VerifierDashboard = ({ verifierId, title, subtitle, icon, accentColor }) =
                   <Typography variant="caption" color="text.secondary" mb={1} display="block">Attached Invoice</Typography>
                   <Box
                     component="img"
-                    src={`/uploads/${selected.file_hash}`}
+                    src={`${API_BASE_URL}/uploads/${selected.file_hash}`}
                     alt="Invoice"
                     sx={{ width: '100%', maxHeight: 250, objectFit: 'contain', borderRadius: 2, border: '1px solid rgba(255,255,255,0.1)', backgroundColor: 'rgba(0,0,0,0.2)' }}
                   />

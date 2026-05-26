@@ -8,8 +8,11 @@ import {
   AccountBalance, CheckCircle, Cancel, Send, Visibility,
   AttachMoney, Person, Schedule, Gavel, VerifiedUser, Receipt
 } from '@mui/icons-material';
+
 import { useApi } from '../hooks/useApi';
 import { useSelector } from 'react-redux';
+
+const API_BASE_URL = process.env.REACT_APP_API_URL || '';
 
 // New workflow: PND → VRF → FIN → OWN → DSB
 const STATUS_FLOW = ['PND', 'VRF', 'FIN', 'OWN', 'DSB'];
@@ -408,12 +411,12 @@ const FinanceReview = () => {
                     </Typography>
                     <Box
                       component="img"
-                      src={`/uploads/${selected.file_hash}`}
+                      src={`${API_BASE_URL}/uploads/${selected.file_hash}`}
                       alt="Original Vendor Invoice"
                       sx={{ width: '100%', maxHeight: 400, objectFit: 'contain', borderRadius: 2, border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer' }}
-                      onClick={() => setFullImage(`/uploads/${selected.file_hash}`)}
+                      onClick={() => setFullImage(`${API_BASE_URL}/uploads/${selected.file_hash}`)}
                     />
-                    <Typography variant="caption" color="primary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 1, cursor: 'pointer' }} onClick={() => setFullImage(`/uploads/${selected.file_hash}`)}>
+                    <Typography variant="caption" color="primary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 1, cursor: 'pointer' }} onClick={() => setFullImage(`${API_BASE_URL}/uploads/${selected.file_hash}`)}>
                       <Visibility fontSize="inherit" /> Click to view full size
                     </Typography>
                   </Paper>

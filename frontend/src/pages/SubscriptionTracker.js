@@ -12,10 +12,10 @@ const SubscriptionTracker = () => {
   const [subscriptions, setSubscriptions] = useState([]);
   const [open, setOpen] = useState(false);
   const [formData, setFormData] = useState({ name: '', vendor_id: '', cost: '', billing_cycle: 'Monthly', next_renewal_date: '' });
-
   const fetchSubscriptions = async () => {
     try {
-      const res = await fetch('/api/subscriptions', {
+      const API_BASE_URL = process.env.REACT_APP_API_URL || '';
+      const res = await fetch(`${API_BASE_URL}/api/subscriptions`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.ok) {
@@ -36,10 +36,10 @@ const SubscriptionTracker = () => {
     fetchSubscriptions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
   const handleSubmit = async () => {
     try {
-      const res = await fetch('/api/subscriptions', {
+      const API_BASE_URL = process.env.REACT_APP_API_URL || '';
+      const res = await fetch(`${API_BASE_URL}/api/subscriptions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify(formData)
