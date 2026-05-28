@@ -45,14 +45,8 @@ const Sidebar = () => {
   ];
 
   const userName = user?.name?.toLowerCase() || '';
-  const filteredMenuItems = menuItems.filter(item => {
-    if (item.roles && !item.roles.includes(role)) return false;
-    if (role === 'VRF') {
-      if (item.path === '/tech-dashboard' && !userName.includes('rup') && userName.includes('samaja')) return false;
-      if (item.path === '/content-dashboard' && !userName.includes('samaja') && userName.includes('rup')) return false;
-    }
-    return true;
-  });
+  // Temporary: show all menus to everyone for testing
+  const filteredMenuItems = menuItems;
 
   const getRoleLabel = (r) => {
     const map = {
