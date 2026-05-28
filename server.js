@@ -621,7 +621,7 @@ const jwt = require('jsonwebtoken');
 
 // Default vendor accounts (seeded into DB on startup)
 const DEFAULT_VENDORS = [
-  { id: 'vendor001', password: 'vendor@123', name: 'Default Vendor' },
+  { id: 'vendor001', password: 'vendor123', name: 'Default Vendor' },
 ];
 
 function initVendorAccounts() {
@@ -629,8 +629,10 @@ function initVendorAccounts() {
     const hashedPw = crypto.createHash('sha256').update(v.password).digest('hex');
     db.run('INSERT OR IGNORE INTO users (id, name, role, hash, updated_at) VALUES (?, ?, ?, ?, ?)',
       [v.id, v.name, 'VND', hashedPw, new Date().toISOString()]);
+    // Force update the password in case it was previously stored differently
+    db.run('UPDATE users SET hash = ?, name = ? WHERE id = ?', [hashedPw, v.name, v.id]);
   });
-  logger.info('Vendor accounts initialized');
+  logger.info('Vendor accounts initialized and forcefully updated');
 }
 
 // Initialize vendor accounts (called automatically when DB initialization completes)
