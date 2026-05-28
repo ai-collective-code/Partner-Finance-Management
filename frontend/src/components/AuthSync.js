@@ -35,7 +35,7 @@ export default function AuthSync({ children }) {
             })
           });
 
-          let dbRole = 'DEV';
+          let dbRole = 'NONE';
           let dbName = user.fullName || user.username || user.emailAddresses?.[0]?.emailAddress || 'User';
           if (syncRes.ok) {
             const syncData = await syncRes.json();
@@ -60,7 +60,7 @@ export default function AuthSync({ children }) {
           // Even on error, allow app to load with basic Clerk data
           if (user) {
             dispatch({ type: 'auth/setAuth', payload: {
-              user: { id: user.id, name: user.fullName || 'User', role: 'DEV' },
+              user: { id: user.id, name: user.fullName || 'User', role: 'NONE' },
               token: null
             }});
           }

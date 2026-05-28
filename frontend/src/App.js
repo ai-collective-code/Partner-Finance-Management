@@ -154,6 +154,20 @@ function VendorAuthWrapper({ children }) {
   return children;
 }
 
+function NoAccessScreen() {
+  return (
+    <Box sx={{ display: 'flex', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', bgcolor: '#0b0f19', flexDirection: 'column' }}>
+      <Typography variant="h4" color="error" fontWeight={700} mb={2}>Access Denied</Typography>
+      <Typography variant="body1" color="text.secondary" mb={4}>Your account does not have permission to access this application.</Typography>
+      <SignOutButton>
+        <Box component="button" sx={{ px: 4, py: 1.5, bgcolor: '#ef4444', color: 'white', borderRadius: 2, border: 'none', cursor: 'pointer', fontWeight: 600, '&:hover': { bgcolor: '#dc2626' } }}>
+          Sign Out
+        </Box>
+      </SignOutButton>
+    </Box>
+  );
+}
+
 function App() {
   const location = useLocation();
   const { isAuthenticated, user } = useSelector(state => state.auth);
@@ -190,7 +204,7 @@ function App() {
 
       <SignedIn>
         <AuthSync>
-          <AuthenticatedLayout />
+          {user?.role === 'NONE' ? <NoAccessScreen /> : <AuthenticatedLayout />}
         </AuthSync>
       </SignedIn>
     </VendorAuthWrapper>

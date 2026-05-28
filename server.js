@@ -600,7 +600,10 @@ function signAuditEntry(reqId, actor, prev, next, comment, ts) {
 // ══════════ EMAIL → ROLE MAPPING (Fixed Roles) ══════════
 const EMAIL_ROLE_MAP = {
   'rayabakash@gmail.com':      { role: 'DEV', name: 'Abakash' },
-  'rup@aicollective.agency':   { role: 'VRF', name: 'Rup' },
+  'abakashray57@gmail.com':    { role: 'EMP', name: 'Abakash' },
+  'abakashray772@gmail.com':   { role: 'VRF', name: 'Rup' },
+  'abakashray846@gmail.com':   { role: 'VRF', name: 'Samaja' },
+  'abakashray003@gmail.com':   { role: 'FIN', name: 'Yash' },
   'rayabakash0@gmail.com':     { role: 'OWN', name: 'Debojit' },
   'cse2022017@rcciit.org.in':  { role: 'ADM', name: 'Admin' },
 };
@@ -672,7 +675,7 @@ async function authenticateToken(req, res, next) {
       if (!user) {
         // Auto-create user — use email-based role if available
         const emailMapping = getRoleByEmail(payload.email);
-        const assignedRole = emailMapping ? emailMapping.role : 'DEV';
+        const assignedRole = emailMapping ? emailMapping.role : 'NONE';
         const assignedName = emailMapping ? emailMapping.name : (payload.name || 'User');
         logger.info({ userId, email: payload.email, assignedRole, assignedName }, 'New user auto-created with email-based role');
         
@@ -700,13 +703,17 @@ async function authenticateToken(req, res, next) {
             user.name = emailMapping.name;
           }
         } else {
-          // Email is not mapped — reset role to DEV to revoke prior permissions
-          if (user.role !== 'DEV') {
+          // Email is not mapped — reset role to NONE to revoke prior permissions
+          if (user.role !== 'NONE') {
             db.run('UPDATE users SET role = ?, updated_at = ? WHERE id = ?',
-              ['DEV', new Date().toISOString(), userId]);
-            user.role = 'DEV';
+              ['NONE', new Date().toISOString(), userId]);
+            user.role = 'NONE';
           }
         }
+      }
+      req.user = user;
+      if (user.role === 'NONE') {
+        return res.status(403).json({ error: 'Your account has been deactivated or lacks permissions.' });
       }
       req.user = user;
       req.clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
@@ -767,7 +774,7 @@ app.post('/api/sync-user', async (req, res, next) => {
     
     // Look up role by email from the fixed mapping
     const emailMapping = getRoleByEmail(userEmail);
-    const assignedRole = emailMapping ? emailMapping.role : 'DEV';
+    const assignedRole = emailMapping ? emailMapping.role : 'NONE';
     const assignedName = emailMapping ? emailMapping.name : (name || payload.name || 'User');
     
     db.get('SELECT role, name FROM users WHERE id = ?', [userId], (err, user) => {
@@ -789,11 +796,11 @@ app.post('/api/sync-user', async (req, res, next) => {
             logger.info({ userId, email: userEmail, oldRole: user.role, newRole: assignedRole }, 'User role corrected by email mapping');
           }
         } else {
-          // If no mapping exists, force downgrade to DEV role to revoke permissions
-          if (user.role !== 'DEV') {
+          // If no mapping exists, force downgrade to NONE role to revoke permissions
+          if (user.role !== 'NONE') {
             db.run('UPDATE users SET role = ?, updated_at = ? WHERE id = ?',
-              ['DEV', new Date().toISOString(), userId]);
-            logger.info({ userId, email: userEmail, oldRole: user.role, newRole: 'DEV' }, 'User role revoked due to removed mapping');
+              ['NONE', new Date().toISOString(), userId]);
+            logger.info({ userId, email: userEmail, oldRole: user.role, newRole: 'NONE' }, 'User role revoked due to removed mapping');
           }
         }
         res.json({ success: true, role: assignedRole, name: assignedName });
