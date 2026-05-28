@@ -1342,8 +1342,8 @@ Return ONLY a valid JSON object with NO markdown, NO code fences, NO backticks. 
 // Regex-based text parsing heuristic for fallback OCR
 function parseRawInvoiceText(text, originalFilename) {
   let amount = 1000;
-  // Look for total/amount patterns (e.g. Total: ₹15,000.00, RS 2400)
-  const amtMatch = text.match(/(?:total|amount|amt|payable|sum|net|gross)\s*(?:rs\.?|inr|₹|usd|\$)?\s*([\d,]+(?:\.\d{2})?)/i);
+  // Look for total/amount patterns (e.g. Total: ₹15,000.00, RS 2400, Total (INR) 5,000.00)
+  const amtMatch = text.match(/(?:total|amount|amt|payable|sum|net|gross)[\s\W]*(?:rs\.?|inr|₹|usd|\$)?[\s\W]*([\d,]+(?:\.\d{2})?)/i);
   if (amtMatch) {
     amount = parseFloat(amtMatch[1].replace(/,/g, ''));
   }
@@ -1352,15 +1352,31 @@ function parseRawInvoiceText(text, originalFilename) {
   const gstMatch = text.match(/\b\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}[Z]{1}[A-Z\d]{1}\b/);
   const gstNumber = gstMatch ? gstMatch[0] : null;
 
-  // Look for dates
-  const dateMatch = text.match(/\b(?:\d{1,2}[-\/.]\d{1,2}[-\/.]\d{2,4})|(?:\d{4}[-\/.]\d{1,2}[-\/.]\d{1,2})\b/);
-  const invoiceDate = dateMatch ? dateMatch[0] : new Date().toISOString().split('T')[0];
+  // Look for dates (e.g. 2024-05-28, 28/05/2024, Apr 28, 2026)
+  const dateMatch = text.match(/\b(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2},?\s+\d{4})|(?:\d{1,2}[-\/.]\d{1,2}[-\/.]\d{2,4})|(?:\d{4}[-\/.]\d{1,2}[-\/.]\d{1,2})\b/i);
+  let invoiceDate = new Date().toISOString().split('T')[0];
+  if (dateMatch) {
+    try {
+      const d = new Date(dateMatch[0]);
+      if (!isNaN(d)) invoiceDate = d.toISOString().split('T')[0];
+    } catch (e) {}
+  }
 
   // Look for vendor name
   let vendorName = 'Unknown Vendor';
   const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-  if (lines.length > 0) {
-    vendorName = lines[0].substring(0, 40);
+  
+  const billedByLine = lines.find(l => l.toLowerCase().startsWith('billed by:') || l.toLowerCase().startsWith('from:'));
+  if (billedByLine) {
+    vendorName = billedByLine.replace(/^(billed by:|from:)\s*/i, '').substring(0, 40);
+  } else {
+    const billedByIndex = lines.findIndex(l => l.toLowerCase() === 'billed by' || l.toLowerCase() === 'from');
+    if (billedByIndex >= 0 && billedByIndex + 1 < lines.length) {
+      vendorName = lines[billedByIndex + 1].substring(0, 40);
+    } else if (lines.length > 0) {
+      const startIdx = lines[0].toLowerCase().includes('invoice') && lines.length > 1 ? 1 : 0;
+      vendorName = lines[startIdx].substring(0, 40);
+    }
   }
 
   return {
