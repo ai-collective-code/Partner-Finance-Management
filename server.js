@@ -580,7 +580,7 @@ async function initDb() {
     user: process.env.PGUSER || 'postgres',
     password: process.env.PGPASSWORD || 'postgres',
     database: process.env.PGDATABASE || 'finance',
-    ssl: process.env.PGHOST && process.env.PGHOST !== 'localhost' ? { rejectUnauthorized: false } : false
+    ssl: process.env.PGHOST && process.env.PGHOST !== 'localhost' && process.env.PGHOST.includes('.') ? { rejectUnauthorized: false } : false
   };
 
   try {
