@@ -600,10 +600,7 @@ function signAuditEntry(reqId, actor, prev, next, comment, ts) {
 // ══════════ EMAIL → ROLE MAPPING (Fixed Roles) ══════════
 const EMAIL_ROLE_MAP = {
   'rayabakash@gmail.com':      { role: 'DEV', name: 'Abakash' },
-  'abakashray57@gmail.com':    { role: 'EMP', name: 'Abakash' },
-  'abakashray772@gmail.com':   { role: 'VRF', name: 'Rup' },
-  'abakashray846@gmail.com':   { role: 'VRF', name: 'Samaja' },
-  'abakashray003@gmail.com':   { role: 'FIN', name: 'Yash' },
+  'rup@aicollective.agency':   { role: 'VRF', name: 'Rup' },
   'rayabakash0@gmail.com':     { role: 'OWN', name: 'Debojit' },
   'cse2022017@rcciit.org.in':  { role: 'ADM', name: 'Admin' },
 };
