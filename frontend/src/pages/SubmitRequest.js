@@ -3,7 +3,7 @@ import {
   Box, Typography, TextField, Button, Paper, InputAdornment, 
   Alert, Grid, CircularProgress, Switch, FormControlLabel, 
   Select, MenuItem, InputLabel, FormControl, Divider, Avatar, Chip,
-  Tooltip, IconButton
+  Tooltip, IconButton, Autocomplete, Dialog, DialogTitle, DialogContent, DialogActions
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../hooks/useApi';
@@ -25,8 +25,22 @@ const VERIFIERS = [
   { id: 'rup',     name: 'Rup',     title: 'Tech Head',           icon: <Engineering />, color: '#3b82f6', bg: 'rgba(59,130,246,0.1)' },
   { id: 'debojit', name: 'Debojit', title: 'Creative Head & Owner', icon: <Person />,    color: '#8b5cf6', bg: 'rgba(139,92,246,0.1)' },
   { id: 'yash',    name: 'Yash',    title: 'Finance Head',        icon: <AccountBalance />, color: '#22c55e', bg: 'rgba(34,197,94,0.1)' },
-  { id: 'samaja',  name: 'Samaja',  title: 'Content Head',        icon: <Palette />,    color: '#f59e0b', bg: 'rgba(245,158,11,0.1)' },
+  { id: 'SAMAJA', name: 'Samaja', title: 'Content Verifier', color: '#ec4899', bg: 'rgba(236,72,153,0.05)' },
 ];
+
+const JOB_DESCRIPTIONS = ['voice own', 'Ai Operator', 'AI Video artist', 'Music', 'scripting', 'production', 'sound mixing', 'story board', 'others'];
+
+const INDIA_CITIES = {
+  "Mumbai": "Maharashtra", "Delhi": "Delhi", "Bengaluru": "Karnataka", 
+  "Hyderabad": "Telangana", "Chennai": "Tamil Nadu", "Kolkata": "West Bengal", 
+  "Pune": "Maharashtra", "Ahmedabad": "Gujarat", "Jaipur": "Rajasthan", 
+  "Lucknow": "Uttar Pradesh", "Surat": "Gujarat", "Kanpur": "Uttar Pradesh",
+  "Nagpur": "Maharashtra", "Indore": "Madhya Pradesh", "Thane": "Maharashtra",
+  "Bhopal": "Madhya Pradesh", "Visakhapatnam": "Andhra Pradesh", "Pimpri-Chinchwad": "Maharashtra",
+  "Patna": "Bihar", "Vadodara": "Gujarat", "Ghaziabad": "Uttar Pradesh",
+  "Ludhiana": "Punjab", "Agra": "Uttar Pradesh", "Nashik": "Maharashtra",
+  "Faridabad": "Haryana", "Meerut": "Uttar Pradesh", "Rajkot": "Gujarat"
+};
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || '';
 
@@ -109,7 +123,7 @@ const SubmitRequest = () => {
   const [baseAmount, setBaseAmount] = useState('');
   const [isGst, setIsGst] = useState(false);
   const [gstNumber, setGstNumber] = useState('');
-  const [gstPercentage, setGstPercentage] = useState(18);
+  const [gstPercentage, setGstPercentage] = useState(18); // Fixed to 18%
 
   // Derived Financials
   const [gstAmount, setGstAmount] = useState(0);
@@ -124,8 +138,151 @@ const SubmitRequest = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   
+  // Bank & Cheque States
+  const [bankName, setBankName] = useState('');
+  const [branchName, setBranchName] = useState('');
+  const [ifscCode, setIfscCode] = useState('');
+  const [accountNumber, setAccountNumber] = useState('');
+  const [accountType, setAccountType] = useState('Savings');
+  const [beneficiaryName, setBeneficiaryName] = useState('');
+  const [chequeFileHash, setChequeFileHash] = useState('');
+  const [chequeUploadMessage, setChequeUploadMessage] = useState('');
+  const [chequeUploading, setChequeUploading] = useState(false);
+  
   const navigate = useNavigate();
   const { apiFetch } = useApi();
+
+  const [activeProjects, setActiveProjects] = useState([]);
+  const [selectedProject, setSelectedProject] = useState(null); // Full project object
+  const [partnerNameMismatch, setPartnerNameMismatch] = useState(false);
+  
+  // OTP Verification State
+  const [otpRequired, setOtpRequired] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpVerified, setOtpVerified] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [otpError, setOtpError] = useState('');
+  const [otpDialogOpen, setOtpDialogOpen] = useState(false);
+
+  useEffect(() => {
+    const fetchProj = async () => {
+      try {
+        const res = await apiFetch('/api/projects');
+        if (res.ok) {
+          const data = await res.json();
+          setActiveProjects(data || []);
+        }
+      } catch (e) {
+        console.error('Failed to fetch projects', e);
+      }
+    };
+    fetchProj();
+  }, [apiFetch]);
+
+  // When partner selects a project, validate partner name
+  const handleProjectSelect = (event, newInputValue) => {
+    setProjectName(newInputValue || '');
+    setPartnerNameMismatch(false);
+    setOtpRequired(false);
+    setOtpSent(false);
+    setOtpVerified(false);
+    setOtpCode('');
+    setOtpError('');
+    setSelectedProject(null);
+
+    if (!newInputValue) {
+      setPhone('');
+      return;
+    }
+
+    // Find matching project from the active list
+    const matchedProject = activeProjects.find(p => {
+      const displayName = p.code ? `${p.name} (${p.code})` : p.name;
+      return displayName === newInputValue;
+    });
+
+    if (matchedProject) {
+      setSelectedProject(matchedProject);
+
+      // Check partner name match (case-insensitive)
+      if (matchedProject.partner_name) {
+        const partnerOk = vendorName.trim().toLowerCase() === matchedProject.partner_name.trim().toLowerCase();
+        if (!partnerOk) {
+          setPartnerNameMismatch(true);
+        }
+      }
+
+      // If project has a partner phone, OTP is required
+      if (matchedProject.partner_phone) {
+        setOtpRequired(true);
+        setPhone(matchedProject.partner_phone);
+      }
+    }
+  };
+
+  // Re-validate partner name when vendorName changes and a project is selected
+  useEffect(() => {
+    if (selectedProject && selectedProject.partner_name) {
+      const partnerOk = vendorName.trim().toLowerCase() === selectedProject.partner_name.trim().toLowerCase();
+      setPartnerNameMismatch(!partnerOk);
+    }
+  }, [vendorName, selectedProject]);
+
+  const handleSendOtp = async () => {
+    if (!selectedProject?.partner_phone || !selectedProject?.code) return;
+    setOtpLoading(true);
+    setOtpError('');
+    setOtpCode('');
+    try {
+      const res = await apiFetch('/api/projects/send-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: selectedProject.partner_phone, projectCode: selectedProject.code })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setOtpSent(true);
+        setOtpDialogOpen(true);
+        if (data.debug_otp) {
+          // Simulate phone SMS for testing
+          window.alert(`📱 SIMULATED SMS to ${selectedProject.partner_phone}:\n\nYour Ai Collective Finance OTP is: ${data.debug_otp}`);
+        }
+      } else {
+        setOtpError(data.error || 'Failed to send OTP');
+      }
+    } catch (e) {
+      console.error(e);
+      setOtpError('Network error sending OTP');
+    } finally {
+      setOtpLoading(false);
+    }
+  };
+
+  const handleVerifyOtp = async () => {
+    if (!otpCode || !selectedProject?.partner_phone || !selectedProject?.code) return;
+    setOtpLoading(true);
+    setOtpError('');
+    try {
+      const res = await apiFetch('/api/projects/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: selectedProject.partner_phone, otp: otpCode, projectCode: selectedProject.code })
+      });
+      const data = await res.json();
+      if (res.ok && data.verified) {
+        setOtpVerified(true);
+        setOtpDialogOpen(false);
+        setOtpError('');
+      } else {
+        setOtpError(data.error || 'OTP verification failed');
+      }
+    } catch {
+      setOtpError('Network error verifying OTP');
+    } finally {
+      setOtpLoading(false);
+    }
+  };
 
   // Dynamic GST Calculation Logic
   useEffect(() => {
@@ -189,6 +346,36 @@ const SubmitRequest = () => {
     }
   };
 
+  const handleChequeUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    setChequeUploadMessage('Uploading cancelled cheque...');
+    setChequeUploading(true);
+    const formData = new FormData();
+    formData.append('invoice', file); // Multer expects the field name "invoice"
+
+    try {
+      const res = await apiFetch('/api/invoices/upload', {
+        method: 'POST',
+        body: formData
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setChequeFileHash(data.file_hash);
+        setChequeUploadMessage('✅ Cancelled cheque uploaded successfully!');
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setChequeUploadMessage(data.error || '❌ Upload failed.');
+      }
+    } catch (err) {
+      console.error(err);
+      setChequeUploadMessage('❌ Network error uploading cheque.');
+    } finally {
+      setChequeUploading(false);
+    }
+  };
+
   const applyOcrToForm = () => {
     if (!ocrData) return;
     const newVerifications = {};
@@ -231,16 +418,41 @@ const SubmitRequest = () => {
     e.preventDefault();
     
     const missingFields = [];
-    if (!vendorName.trim()) missingFields.push('Vendor Name');
+    if (!fileHash) missingFields.push('Partner Invoice File (Step 1)');
+    if (!vendorName.trim()) missingFields.push('Partner Name');
+    if (!companyName.trim()) missingFields.push('Company Name');
+    if (!phone.trim()) missingFields.push('Phone Number');
     if (!city.trim()) missingFields.push('City / Location');
-    if (!baseAmount || parseFloat(baseAmount) <= 0) missingFields.push('Invoice Amount');
+    if (!projectName.trim()) missingFields.push('Project Name');
+    if (!department.trim()) missingFields.push('Job Description');
+    if (!selectedVerifier) missingFields.push('Project Head');
+    if (!startDate) missingFields.push('Start Date');
+    if (!endDate) missingFields.push('End Date');
+    if (advanceAmount.trim() === '') missingFields.push('Advance Amount (enter 0 if none)');
+    if (!baseAmount || parseFloat(baseAmount) <= 0) missingFields.push('Base Invoice Amount');
+    if (isGst && !gstNumber.trim()) missingFields.push('GST Number');
+    if (!beneficiaryName.trim()) missingFields.push('Beneficiary Name');
+    if (!bankName.trim()) missingFields.push('Bank Name');
+    if (!branchName.trim()) missingFields.push('Branch Name');
+    if (!ifscCode.trim() || ifscCode.length !== 11) missingFields.push('Valid 11-digit IFSC Code');
+    if (!accountNumber.trim()) missingFields.push('Bank Account Number');
+    if (!chequeFileHash) missingFields.push('Cancelled Cheque Scan (Step 5)');
+    if (!purpose.trim()) missingFields.push('Business Purpose / Remarks');
 
     if (missingFields.length > 0) {
-      setError(`Please fill in the required fields: ${missingFields.join(', ')}.`);
+      setError(`Please fill in all mandatory fields: ${missingFields.join(', ')}.`);
       return;
     }
-    if (!selectedVerifier) {
-      setError('Please select a first-line verifier from the team.');
+
+    // Anti-fraud: Block if partner name doesn't match project's assigned partner
+    if (selectedProject && selectedProject.partner_name && partnerNameMismatch) {
+      setError(`Partner name "${vendorName}" does not match the authorized partner for this project. Please check your name or select a different project.`);
+      return;
+    }
+
+    // Anti-fraud: Block if OTP required but not verified
+    if (otpRequired && !otpVerified) {
+      setError('Phone OTP verification is required for this project. Please verify your phone number before submitting.');
       return;
     }
     
@@ -254,7 +466,9 @@ const SubmitRequest = () => {
         baseAmount: parseFloat(baseAmount) || 0,
         isGst, gstNumber, gstPercentage, gstAmount, totalAmount, gstType,
         fileHash,
-        fieldVerifications: verifications  // Save verification status
+        fieldVerifications: verifications,  // Save verification status
+        bankName, branchName, ifscCode, accountNumber, accountType, beneficiaryName,
+        chequeFileHash
       });
 
       const res = await apiFetch('/api/requests', {
@@ -262,7 +476,7 @@ const SubmitRequest = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           amount: totalAmount || parseFloat(baseAmount),
-          purpose: purpose || `Invoice from ${vendorName || 'Vendor'} — ₹${baseAmount}`,
+          purpose: purpose || `Invoice from ${vendorName || 'Partner'} — ₹${baseAmount}`,
           metadata,
           file_hash: fileHash,
           verifier: selectedVerifier
@@ -289,41 +503,10 @@ const SubmitRequest = () => {
 
   return (
     <Box sx={{ maxWidth: 960, mx: 'auto', mt: 2, mb: 10 }}>
-      <Typography variant="h4" mb={0.5} fontWeight={700}>Vendor & Project Disbursement Form</Typography>
+      <Typography variant="h4" mb={0.5} fontWeight={700}>Partner & Project Disbursement Form</Typography>
       <Typography variant="body1" color="text.secondary" mb={1}>
-        Initialize a secure financial request. <strong style={{ color: '#f59e0b' }}>★ Only Vendor Name, Location & Amount are required</strong> — all other fields are optional.
+        Initialize a secure financial request. <strong style={{ color: '#f59e0b' }}>★ All form fields and documents are strictly mandatory.</strong>
       </Typography>
-      
-      {/* ── WORKFLOW DIAGRAM BANNER ── */}
-      <Paper sx={{ p: 3, mb: 4, borderRadius: 3, background: 'linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(139,92,246,0.08) 100%)', border: '1px solid rgba(99,102,241,0.2)' }}>
-        <Typography variant="subtitle2" color="primary" mb={2} sx={{ fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', fontSize: 11 }}>
-          📋 Approval Workflow
-        </Typography>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-          {[
-            { label: 'Vendor Submits', color: '#6366f1', icon: '🏪' },
-            { label: '▶', color: 'text.disabled', arrow: true },
-            { label: 'First-Line Verifier', color: '#f59e0b', icon: '👁️' },
-            { label: '▶', color: 'text.disabled', arrow: true },
-            { label: 'Finance (Yash)', color: '#22c55e', icon: '💼' },
-            { label: '▶', color: 'text.disabled', arrow: true },
-            { label: 'Owner (Debojit)', color: '#8b5cf6', icon: '👑' },
-            { label: '▶', color: 'text.disabled', arrow: true },
-            { label: 'Payment ✅', color: '#22c55e', icon: '' },
-          ].map((step, i) => 
-            step.arrow ? (
-              <Typography key={i} sx={{ color: 'text.disabled', fontSize: 18, fontWeight: 700 }}>→</Typography>
-            ) : (
-              <Chip key={i} label={`${step.icon} ${step.label}`} size="small"
-                sx={{ bgcolor: `${step.color}22`, color: step.color, border: `1px solid ${step.color}44`, fontWeight: 600 }} />
-            )
-          )}
-        </Box>
-        <Typography variant="caption" color="text.secondary" sx={{ mt: 1.5, display: 'block' }}>
-          Choose a first-line verifier below. Rup (Tech), Debojit (Creative/Owner), Yash (Finance), or Samaja (Content) will perform the initial review.
-        </Typography>
-      </Paper>
-
       <Paper sx={{ p: 4, borderRadius: 2 }}>
         {success && <Alert severity="success" sx={{ mb: 3 }}>Request submitted successfully! Redirecting to Dashboard...</Alert>}
         {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
@@ -331,13 +514,13 @@ const SubmitRequest = () => {
         <form onSubmit={handleSubmit}>
           
           {/* ── STEP 1: UPLOAD INVOICE ── */}
-          <Typography variant="h6" color="primary" mb={1}>1. Upload Vendor Invoice (AI OCR)</Typography>
+          <Typography variant="h6" color="primary" mb={1}>1. Upload Partner Invoice (AI OCR)</Typography>
           <Box sx={{ mb: 4, p: 3, border: '1px dashed rgba(99,102,241,0.5)', borderRadius: 2, bgcolor: 'rgba(99,102,241,0.05)' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, flexWrap: 'wrap', gap: 1.5 }}>
               {!fileHash ? (
                 <Button variant="outlined" component="label" sx={{ mr: 2, background: 'linear-gradient(135deg, rgba(99,102,241,0.08), rgba(139,92,246,0.08))', borderColor: 'primary.main' }} disabled={ocrScanning}>
-                  📁 Upload Image
-                  <input type="file" hidden accept="image/*,.webp,.heic,.heif" onChange={handleFileUpload} />
+                  📁 Upload Invoice (Image/PDF)
+                  <input type="file" hidden accept="image/*,.webp,.heic,.heif,.pdf" onChange={handleFileUpload} />
                 </Button>
               ) : (
                 <Button variant="outlined" color="error" onClick={() => { setFileHash(''); setUploadMessage(''); setBaseAmount(''); setOcrData(null); setOcrApplied(false); setVerifications({}); }} disabled={ocrScanning}>
@@ -359,7 +542,7 @@ const SubmitRequest = () => {
                     <AutoAwesome sx={{ color: '#8b5cf6', fontSize: 18 }} /> High-Class AI OCR Scanning Active
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
-                    Extracting vendor name, base amount, tax breakdowns, and handwriting...
+                    Extracting partner name, base amount, tax breakdowns, and handwriting...
                   </Typography>
                 </Box>
               </Paper>
@@ -420,7 +603,7 @@ const SubmitRequest = () => {
 
                       <Grid container spacing={2} mb={2.5}>
                         <Grid item xs={6}>
-                          <Typography variant="caption" color="text.secondary" display="block">🏢 Vendor Name</Typography>
+                          <Typography variant="caption" color="text.secondary" display="block">🤝 Partner Name</Typography>
                           <Typography variant="body2" fontWeight={600} noWrap>{ocrData.vendor_name || 'Not detected'}</Typography>
                         </Grid>
                         <Grid item xs={6}>
@@ -482,7 +665,7 @@ const SubmitRequest = () => {
               <VerifiedUser sx={{ color: '#6366f1' }} />
               <Box sx={{ flex: 1 }}>
                 <Typography variant="body2" fontWeight={700} sx={{ color: 'primary.main' }}>
-                  🔍 Second-Line Vendor Verification Active
+                  🔍 Second-Line Partner Verification Active
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
                   Review each auto-filled field below — click ✓ to confirm accuracy or ✗ to flag for correction.
@@ -496,52 +679,17 @@ const SubmitRequest = () => {
             </Paper>
           )}
 
-          {/* ── STEP 2: VERIFIER SELECTION ── */}
-          <Typography variant="h6" color="primary" mb={1}>2. Select First-Line Verifier</Typography>
-          <Typography variant="body2" color="text.secondary" mb={2}>
-            Choose who will perform the first review of this request before it goes to Finance.
-          </Typography>
-          <Grid container spacing={2} mb={4}>
-            {VERIFIERS.map((v) => (
-              <Grid item xs={12} sm={6} md={3} key={v.id}>
-                <Paper
-                  onClick={() => setSelectedVerifier(v.id)}
-                  elevation={selectedVerifier === v.id ? 6 : 1}
-                  sx={{
-                    p: 2.5, borderRadius: 3, cursor: 'pointer', textAlign: 'center',
-                    border: selectedVerifier === v.id ? `2px solid ${v.color}` : '2px solid transparent',
-                    background: selectedVerifier === v.id ? v.bg : 'rgba(255,255,255,0.02)',
-                    transition: 'all 0.2s ease', position: 'relative',
-                    '&:hover': { background: v.bg, border: `2px solid ${v.color}66` }
-                  }}
-                >
-                  {selectedVerifier === v.id && (
-                    <CheckCircle sx={{ position: 'absolute', top: 8, right: 8, color: v.color, fontSize: 18 }} />
-                  )}
-                  <Avatar sx={{ bgcolor: v.color, width: 52, height: 52, mx: 'auto', mb: 1.5, fontSize: 22, fontWeight: 700 }}>
-                    {v.name.charAt(0)}
-                  </Avatar>
-                  <Typography variant="subtitle1" fontWeight={700} sx={{ color: selectedVerifier === v.id ? v.color : 'text.primary' }}>
-                    {v.name}
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary">{v.title}</Typography>
-                </Paper>
-              </Grid>
-            ))}
-          </Grid>
-          <Divider sx={{ mb: 4 }} />
-
-          {/* ── STEP 3: VENDOR DETAILS ── */}
+          {/* ── STEP 2: VENDOR DETAILS ── */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-            <Typography variant="h6" color="primary">3. Vendor Details</Typography>
-            <Chip label="Name & Location Required ★" size="small" sx={{ bgcolor: 'rgba(245,158,11,0.15)', color: '#f59e0b', fontWeight: 700, fontSize: 10, border: '1px solid rgba(245,158,11,0.3)' }} />
+            <Typography variant="h6" color="primary">2. Partner Details</Typography>
+            <Chip label="All Fields Mandatory ★" size="small" sx={{ bgcolor: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 700, fontSize: 10, border: '1px solid rgba(239,68,68,0.3)' }} />
           </Box>
           <Grid container spacing={3} mb={4}>
             <Grid item xs={12} sm={6}>
               <TextField 
-                fullWidth label="Vendor Name ★" value={vendorName} 
+                fullWidth label="Partner Name" value={vendorName} 
                 onChange={(e) => setVendorName(e.target.value)} required
-                helperText={verifications['vendorName'] === false ? '⚠ Please correct this value' : verifications['vendorName'] === true ? '✓ Confirmed by vendor' : ''}
+                helperText={verifications['vendorName'] === false ? '⚠ Please correct this value' : verifications['vendorName'] === true ? '✓ Confirmed by partner' : ''}
                 FormHelperTextProps={{ sx: { color: verifications['vendorName'] === false ? '#ef4444' : '#10b981' } }}
               />
               <FieldVerifyBadge fieldKey="vendorName" verifications={verifications} onVerify={handleVerify} />
@@ -549,74 +697,248 @@ const SubmitRequest = () => {
             <Grid item xs={12} sm={6}>
               <TextField 
                 fullWidth label="Company Name" value={companyName} 
-                onChange={(e) => setCompanyName(e.target.value)}
+                onChange={(e) => setCompanyName(e.target.value)} required
               />
               <FieldVerifyBadge fieldKey="companyName" verifications={verifications} onVerify={handleVerify} />
             </Grid>
             <Grid item xs={12} sm={6}>
-              <TextField fullWidth label="Phone Number (Optional)" value={phone} onChange={(e) => setPhone(e.target.value)} />
+              <TextField 
+                fullWidth 
+                required
+                label="Phone Number" 
+                value={phone} 
+                onChange={(e) => setPhone(e.target.value)}
+                InputProps={{
+                  endAdornment: selectedProject?.partner_phone ? (
+                    <InputAdornment position="end">
+                      {otpVerified ? (
+                        <Chip 
+                          label="Verified ✅" 
+                          size="small" 
+                          sx={{ 
+                            fontWeight: 700, 
+                            bgcolor: 'rgba(16,185,129,0.15)', 
+                            color: '#10b981', 
+                            border: '1px solid rgba(16,185,129,0.4)',
+                            height: 28
+                          }} 
+                        />
+                      ) : (
+                        <Button 
+                          variant="contained" 
+                          size="small" 
+                          onClick={handleSendOtp} 
+                          disabled={otpLoading || partnerNameMismatch}
+                          sx={{ 
+                            background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', 
+                            fontWeight: 700,
+                            textTransform: 'none',
+                            fontSize: '0.72rem',
+                            py: 0.4,
+                            px: 1.2,
+                            boxShadow: 'none',
+                            borderRadius: '6px',
+                            '&:hover': {
+                              background: 'linear-gradient(135deg, #5052d9, #7c4dff)',
+                              boxShadow: 'none'
+                            }
+                          }}
+                        >
+                          {otpLoading ? 'Sending...' : otpSent ? 'Resend' : 'Verify'}
+                        </Button>
+                      )}
+                    </InputAdornment>
+                  ) : null
+                }}
+              />
             </Grid>
             <Grid item xs={12} sm={6}></Grid>
             
             <Grid item xs={12} sm={6}>
-              <TextField 
-                fullWidth label="City / Location ★" value={city} 
-                onChange={(e) => setCity(e.target.value)} required 
-              />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <FormControl fullWidth>
-                <InputLabel>State (Optional)</InputLabel>
-                <Select value={state} label="State (Optional)" onChange={(e) => setState(e.target.value)}>
-                  {STATES.map(s => <MenuItem key={s} value={s}>{s}</MenuItem>)}
+              <FormControl fullWidth required>
+                <InputLabel>City / Location ★</InputLabel>
+                <Select
+                  value={city}
+                  label="City / Location ★"
+                  onChange={(e) => {
+                    const selectedCity = e.target.value;
+                    setCity(selectedCity);
+                    if (INDIA_CITIES[selectedCity]) {
+                      setState(INDIA_CITIES[selectedCity]);
+                    }
+                  }}
+                >
+                  {Object.keys(INDIA_CITIES).map(c => <MenuItem key={c} value={c}>{c}</MenuItem>)}
                 </Select>
               </FormControl>
             </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField fullWidth label="State (Auto-filled)" value={state} InputProps={{ readOnly: true }} />
+            </Grid>
           </Grid>
           <Divider sx={{ mb: 4 }} />
 
-          {/* ── STEP 4: PROJECT DETAILS ── */}
+          {/* ── STEP 3: PROJECT DETAILS ── */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-            <Typography variant="h6" color="primary">4. Project Details</Typography>
-            <Chip label="All Optional" size="small" sx={{ bgcolor: 'rgba(99,102,241,0.1)', color: '#6366f1', fontWeight: 700, fontSize: 10, border: '1px solid rgba(99,102,241,0.3)' }} />
+            <Typography variant="h6" color="primary">3. Project Details</Typography>
+            <Chip label="All Fields Mandatory ★" size="small" sx={{ bgcolor: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 700, fontSize: 10, border: '1px solid rgba(239,68,68,0.3)' }} />
           </Box>
-          <Grid container spacing={3} mb={4}>
+          <Grid container spacing={3} mb={2}>
             <Grid item xs={12} sm={6}>
-              <TextField fullWidth label="Project Name (Optional)" value={projectName} onChange={(e) => setProjectName(e.target.value)} />
+              <Autocomplete
+                freeSolo
+                options={activeProjects.map((option) => option.code ? `${option.name} (${option.code})` : option.name)}
+                value={projectName}
+                onInputChange={handleProjectSelect}
+                renderInput={(params) => (
+                  <TextField {...params} label="Project Name" required fullWidth />
+                )}
+              />
             </Grid>
             <Grid item xs={12} sm={6}>
-              <TextField fullWidth label="Department (Optional)" value={department} onChange={(e) => setDepartment(e.target.value)} />
+              <FormControl fullWidth required>
+                <InputLabel>Job Description</InputLabel>
+                <Select value={department} label="Job Description" onChange={(e) => setDepartment(e.target.value)}>
+                  {JOB_DESCRIPTIONS.map(jd => <MenuItem key={jd} value={jd}>{jd}</MenuItem>)}
+                </Select>
+              </FormControl>
             </Grid>
             <Grid item xs={12} sm={6}>
-              <TextField fullWidth label="Project Head (Optional)" value={projectHead} onChange={(e) => setProjectHead(e.target.value)} />
+              <FormControl fullWidth required>
+                <InputLabel>Project Head</InputLabel>
+                <Select 
+                  value={selectedVerifier} 
+                  label="Project Head" 
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setSelectedVerifier(val);
+                    const v = VERIFIERS.find(x => x.id === val);
+                    if (v) setProjectHead(v.name);
+                  }}
+                >
+                  {VERIFIERS.map(v => <MenuItem key={v.id} value={v.id}>{v.name} - {v.title}</MenuItem>)}
+                </Select>
+              </FormControl>
             </Grid>
             <Grid item xs={12} sm={6}></Grid>
             <Grid item xs={12} sm={6}>
-              <TextField fullWidth type="date" label="Start Date (Optional)" value={startDate} onChange={(e) => setStartDate(e.target.value)} InputLabelProps={{ shrink: true }} />
+              <TextField fullWidth required type="date" label="Start Date" value={startDate} onChange={(e) => setStartDate(e.target.value)} InputLabelProps={{ shrink: true }} />
               <FieldVerifyBadge fieldKey="startDate" verifications={verifications} onVerify={handleVerify} />
             </Grid>
             <Grid item xs={12} sm={6}>
-              <TextField fullWidth type="date" label="End Date (Optional)" value={endDate} onChange={(e) => setEndDate(e.target.value)} InputLabelProps={{ shrink: true }} />
+              <TextField fullWidth required type="date" label="End Date" value={endDate} onChange={(e) => setEndDate(e.target.value)} InputLabelProps={{ shrink: true }} />
             </Grid>
           </Grid>
+
+          {/* ── PARTNER VERIFICATION STATUS ── */}
+          {selectedProject && (selectedProject.partner_name || selectedProject.partner_phone) && (
+            <Paper sx={{ p: 2.5, mb: 3, borderRadius: 2, border: '1px solid', borderColor: partnerNameMismatch ? 'error.main' : otpRequired && !otpVerified ? 'warning.main' : 'success.main', background: partnerNameMismatch ? 'rgba(239,68,68,0.05)' : otpRequired && !otpVerified ? 'rgba(245,158,11,0.05)' : 'rgba(16,185,129,0.05)' }}>
+              <Typography variant="subtitle2" fontWeight={700} mb={1.5} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                🔒 Partner Verification
+              </Typography>
+
+              {/* Partner Name Check */}
+              {selectedProject.partner_name && (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                  {partnerNameMismatch ? (
+                    <Cancel sx={{ color: 'error.main', fontSize: 20 }} />
+                  ) : (
+                    <CheckCircle sx={{ color: 'success.main', fontSize: 20 }} />
+                  )}
+                  <Typography variant="body2">
+                    <strong>Name Match:</strong> Expected "{selectedProject.partner_name}"
+                    {partnerNameMismatch 
+                      ? <Chip label="MISMATCH" size="small" color="error" sx={{ ml: 1, fontWeight: 700, fontSize: 10 }} />
+                      : <Chip label="MATCHED" size="small" color="success" sx={{ ml: 1, fontWeight: 700, fontSize: 10 }} />
+                    }
+                  </Typography>
+                </Box>
+              )}
+
+              {/* Phone OTP Check */}
+              {selectedProject.partner_phone && (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  {otpVerified ? (
+                    <CheckCircle sx={{ color: 'success.main', fontSize: 20 }} />
+                  ) : (
+                    <Cancel sx={{ color: 'warning.main', fontSize: 20 }} />
+                  )}
+                  <Typography variant="body2">
+                    <strong>Phone OTP:</strong> {selectedProject.partner_phone.replace(/\d(?=\d{4})/g, '*')}
+                    {otpVerified 
+                      ? <Chip label="VERIFIED ✅" size="small" color="success" sx={{ ml: 1, fontWeight: 700, fontSize: 10 }} />
+                      : <Button 
+                          variant="contained" size="small" 
+                          onClick={handleSendOtp} 
+                          disabled={otpLoading || partnerNameMismatch}
+                          sx={{ ml: 1, py: 0.3, px: 1.5, fontSize: 11, fontWeight: 700, background: 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}
+                        >
+                          {otpLoading ? 'Sending...' : otpSent ? 'Resend OTP' : 'Send OTP'}
+                        </Button>
+                    }
+                  </Typography>
+                </Box>
+              )}
+
+              {otpError && <Typography variant="caption" color="error" sx={{ mt: 1, display: 'block' }}>{otpError}</Typography>}
+
+              {partnerNameMismatch && (
+                <Typography variant="caption" color="error" sx={{ mt: 1.5, display: 'block', fontWeight: 600 }}>
+                  ⚠️ Your Partner Name must match "{selectedProject.partner_name}" to submit this invoice. This is an anti-fraud measure.
+                </Typography>
+              )}
+            </Paper>
+          )}
+
+          {/* OTP Input Dialog */}
+          <Dialog open={otpDialogOpen} onClose={() => setOtpDialogOpen(false)} maxWidth="xs" fullWidth>
+            <DialogTitle sx={{ fontWeight: 700 }}>🔑 Enter OTP Verification Code</DialogTitle>
+            <DialogContent>
+              <Typography variant="body2" color="text.secondary" mb={2}>
+                A 6-digit OTP has been sent to {selectedProject?.partner_phone?.replace(/\d(?=\d{4})/g, '*')}. 
+                Enter it below to verify your identity.
+              </Typography>
+              <TextField
+                fullWidth
+                label="Enter 6-digit OTP"
+                value={otpCode}
+                onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                inputProps={{ maxLength: 6, style: { letterSpacing: 8, fontSize: 24, textAlign: 'center', fontWeight: 700 } }}
+                placeholder="000000"
+                autoFocus
+              />
+              {otpError && <Typography variant="caption" color="error" sx={{ mt: 1, display: 'block' }}>{otpError}</Typography>}
+            </DialogContent>
+            <DialogActions sx={{ px: 3, pb: 2 }}>
+              <Button onClick={() => setOtpDialogOpen(false)}>Cancel</Button>
+              <Button 
+                variant="contained" 
+                onClick={handleVerifyOtp} 
+                disabled={otpCode.length !== 6 || otpLoading}
+                sx={{ background: 'linear-gradient(135deg, #10b981, #059669)', fontWeight: 700 }}
+              >
+                {otpLoading ? 'Verifying...' : 'Verify OTP'}
+              </Button>
+            </DialogActions>
+          </Dialog>
           <Divider sx={{ mb: 4 }} />
 
-          {/* ── STEP 5: FINANCIAL DETAILS ── */}
+          {/* ── STEP 4: FINANCIAL DETAILS ── */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-            <Typography variant="h6" color="primary">5. Financial & GST Details</Typography>
-            <Chip label="Amount Required ★" size="small" sx={{ bgcolor: 'rgba(245,158,11,0.15)', color: '#f59e0b', fontWeight: 700, fontSize: 10, border: '1px solid rgba(245,158,11,0.3)' }} />
+            <Typography variant="h6" color="primary">4. Financial & GST Details</Typography>
+            <Chip label="All Fields Mandatory ★" size="small" sx={{ bgcolor: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 700, fontSize: 10, border: '1px solid rgba(239,68,68,0.3)' }} />
           </Box>
           <Grid container spacing={3} mb={2}>
             <Grid item xs={12} sm={6}>
               <TextField 
-                fullWidth label="Advance Amount (Optional)" type="number" value={advanceAmount} 
+                fullWidth required label="Advance Amount (enter 0 if none)" type="number" value={advanceAmount} 
                 onChange={(e) => setAdvanceAmount(e.target.value)}
                 InputProps={{ startAdornment: <InputAdornment position="start">₹</InputAdornment> }}
               />
             </Grid>
             <Grid item xs={12} sm={6}>
               <TextField 
-                fullWidth label="Base Invoice Amount ★" type="number" value={baseAmount} 
+                fullWidth label="Base Invoice Amount" type="number" value={baseAmount} 
                 onChange={(e) => setBaseAmount(e.target.value)} required
                 InputProps={{ startAdornment: <InputAdornment position="start">₹</InputAdornment> }}
               />
@@ -625,7 +947,7 @@ const SubmitRequest = () => {
             <Grid item xs={12}>
               <FormControlLabel 
                 control={<Switch checked={isGst} onChange={(e) => setIsGst(e.target.checked)} color="primary" />} 
-                label="Apply GST to this transaction" 
+                label={`Apply GST (Fixed 18%: ${state === 'Maharashtra' ? '9% CGST + 9% SGST' : '18% IGST'})`} 
               />
             </Grid>
           </Grid>
@@ -640,25 +962,96 @@ const SubmitRequest = () => {
                   />
                   <FieldVerifyBadge fieldKey="gstNumber" verifications={verifications} onVerify={handleVerify} />
                 </Grid>
-                <Grid item xs={12} sm={6}>
-                  <FormControl fullWidth>
-                    <InputLabel>GST Rate (%)</InputLabel>
-                    <Select value={gstPercentage} label="GST Rate (%)" onChange={(e) => setGstPercentage(e.target.value)}>
-                      <MenuItem value={5}>5%</MenuItem>
-                      <MenuItem value={12}>12%</MenuItem>
-                      <MenuItem value={18}>18%</MenuItem>
-                      <MenuItem value={28}>28%</MenuItem>
-                    </Select>
-                  </FormControl>
-                </Grid>
-                <Grid item xs={12}>
-                  <Typography variant="body2" color="text.secondary">
-                    <strong>Calculated Tax Logic:</strong> {gstType}
-                  </Typography>
-                </Grid>
+                  <Grid item xs={12}>
+                    <Typography variant="body2" color="text.secondary">
+                      <strong>Calculated Tax:</strong> {state === 'Maharashtra' ? 'CGST (9%) + SGST (9%)' : 'IGST (18%)'} = ₹{gstAmount.toFixed(2)}
+                    </Typography>
+                  </Grid>
               </Grid>
             </Box>
           )}
+
+          <Divider sx={{ mb: 4 }} />
+
+          {/* ── STEP 5: BANK & CANCELLED CHEQUE DETAILS ── */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+            <Typography variant="h6" color="primary">5. Bank Details & Cancelled Cheque Upload</Typography>
+            <Chip label="All Fields Mandatory ★" size="small" sx={{ bgcolor: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 700, fontSize: 10, border: '1px solid rgba(239,68,68,0.3)' }} />
+          </Box>
+          <Grid container spacing={3} mb={4}>
+            <Grid item xs={12} sm={6}>
+              <TextField 
+                fullWidth required label="Beneficiary / Account Holder Name" value={beneficiaryName} 
+                onChange={(e) => setBeneficiaryName(e.target.value)} 
+                placeholder="Name as in Bank Account"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField 
+                fullWidth required label="Bank Name" value={bankName} 
+                onChange={(e) => setBankName(e.target.value)} 
+                placeholder="e.g. HDFC Bank, SBI, ICICI"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField 
+                fullWidth required label="Branch Name" value={branchName} 
+                onChange={(e) => setBranchName(e.target.value)} 
+                placeholder="e.g. Connaught Place, Mumbai Main"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField 
+                fullWidth required label="IFSC Code" value={ifscCode} 
+                onChange={(e) => setIfscCode(e.target.value.toUpperCase())} 
+                placeholder="e.g. HDFC0000123"
+                inputProps={{ maxLength: 11 }}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField 
+                fullWidth required label="Bank Account Number" value={accountNumber} 
+                onChange={(e) => setAccountNumber(e.target.value)} 
+                placeholder="e.g. 50100234567890"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <FormControl fullWidth required>
+                <InputLabel>Account Type</InputLabel>
+                <Select value={accountType} label="Account Type" onChange={(e) => setAccountType(e.target.value)}>
+                  <MenuItem value="Savings">Savings</MenuItem>
+                  <MenuItem value="Current">Current</MenuItem>
+                </Select>
+              </FormControl>
+            </Grid>
+            <Grid item xs={12}>
+              <Box sx={{ p: 2.5, border: '1px dashed rgba(16,185,129,0.4)', borderRadius: 2, bgcolor: 'rgba(16,185,129,0.02)' }}>
+                <Typography variant="subtitle2" color="success.main" mb={1.5} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  📸 Upload Cancelled Cheque / Passbook Scan (Image/PDF)
+                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
+                  {!chequeFileHash ? (
+                    <Button variant="outlined" color="success" component="label" disabled={chequeUploading}>
+                      📁 Select Cheque Image/PDF
+                      <input type="file" hidden accept="image/*,.webp,.heic,.heif,.pdf" onChange={handleChequeUpload} />
+                    </Button>
+                  ) : (
+                    <Button variant="outlined" color="error" onClick={() => { setChequeFileHash(''); setChequeUploadMessage(''); }}>
+                      ❌ Remove Cancelled Cheque
+                    </Button>
+                  )}
+                  {chequeUploadMessage && (
+                    <Typography variant="body2" sx={{ color: chequeUploadMessage.startsWith('✅') ? 'success.main' : 'text.secondary' }}>
+                      {chequeUploadMessage}
+                    </Typography>
+                  )}
+                  {chequeFileHash && <Chip label="Cheque Scan Attached" size="small" color="success" />}
+                </Box>
+              </Box>
+            </Grid>
+          </Grid>
+
+          <Divider sx={{ mb: 4 }} />
 
           {/* TOTALS DISPLAY */}
           <Box sx={{ p: 3, mb: 4, bgcolor: 'primary.dark', color: 'white', borderRadius: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -682,9 +1075,9 @@ const SubmitRequest = () => {
           <Grid container spacing={3} mb={4}>
             <Grid item xs={12}>
               <TextField 
-                fullWidth label="Business Purpose / Remarks (Optional)" multiline rows={3}
+                fullWidth required label="Business Purpose / Remarks" multiline rows={3}
                 value={purpose} onChange={(e) => setPurpose(e.target.value)}
-                placeholder="Auto-filled from invoice if available. Can be left blank."
+                placeholder="Brief description of the service rendered or items delivered."
               />
               <FieldVerifyBadge fieldKey="purpose" verifications={verifications} onVerify={handleVerify} />
             </Grid>
@@ -706,26 +1099,34 @@ const SubmitRequest = () => {
           )}
 
           {/* REQUIRED FIELDS SUMMARY */}
-          <Paper sx={{ p: 2, mb: 3, borderRadius: 2, bgcolor: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.25)' }}>
-            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, display: 'block', mb: 1 }}>
-              ★ MINIMUM REQUIRED TO SUBMIT:
+          <Paper sx={{ p: 2.5, mb: 3, borderRadius: 2, bgcolor: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.25)' }}>
+            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 800, display: 'block', mb: 1.5, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+              📋 Form Completion Checklist (All Mandatory)
             </Typography>
             <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
               <Chip 
-                label={`Vendor Name: ${vendorName || 'Missing'}`} size="small"
-                sx={{ bgcolor: vendorName ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: vendorName ? '#10b981' : '#ef4444', fontWeight: 700 }}
+                label={`1. Invoice File: ${fileHash ? '✓ Attached' : 'Missing'}`} size="small"
+                sx={{ bgcolor: fileHash ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: fileHash ? '#10b981' : '#ef4444', fontWeight: 700 }}
               />
               <Chip 
-                label={`City: ${city || 'Missing'}`} size="small"
-                sx={{ bgcolor: city ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: city ? '#10b981' : '#ef4444', fontWeight: 700 }}
+                label={`2. Partner Details: ${vendorName && companyName && phone && city ? '✓ Complete' : 'Incomplete'}`} size="small"
+                sx={{ bgcolor: (vendorName && companyName && phone && city) ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: (vendorName && companyName && phone && city) ? '#10b981' : '#ef4444', fontWeight: 700 }}
               />
               <Chip 
-                label={`Amount: ${baseAmount ? `₹${parseFloat(baseAmount).toLocaleString('en-IN')}` : 'Missing'}`} size="small"
-                sx={{ bgcolor: baseAmount ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: baseAmount ? '#10b981' : '#ef4444', fontWeight: 700 }}
+                label={`3. Project Details: ${projectName && department && selectedVerifier && startDate && endDate ? '✓ Complete' : 'Incomplete'}`} size="small"
+                sx={{ bgcolor: (projectName && department && selectedVerifier && startDate && endDate) ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: (projectName && department && selectedVerifier && startDate && endDate) ? '#10b981' : '#ef4444', fontWeight: 700 }}
               />
               <Chip 
-                label={`Verifier: ${selectedVerifier ? VERIFIERS.find(v=>v.id===selectedVerifier)?.name : 'Not selected'}`} size="small"
-                sx={{ bgcolor: selectedVerifier ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: selectedVerifier ? '#10b981' : '#ef4444', fontWeight: 700 }}
+                label={`4. Financials: ${baseAmount && advanceAmount ? '✓ Complete' : 'Incomplete'}`} size="small"
+                sx={{ bgcolor: (baseAmount && advanceAmount) ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: (baseAmount && advanceAmount) ? '#10b981' : '#ef4444', fontWeight: 700 }}
+              />
+              <Chip 
+                label={`5. Bank Details: ${beneficiaryName && bankName && branchName && ifscCode && accountNumber && chequeFileHash ? '✓ Complete' : 'Incomplete'}`} size="small"
+                sx={{ bgcolor: (beneficiaryName && bankName && branchName && ifscCode && accountNumber && chequeFileHash) ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: (beneficiaryName && bankName && branchName && ifscCode && accountNumber && chequeFileHash) ? '#10b981' : '#ef4444', fontWeight: 700 }}
+              />
+              <Chip 
+                label={`6. Remarks: ${purpose.trim() ? '✓ Added' : 'Missing'}`} size="small"
+                sx={{ bgcolor: purpose.trim() ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: purpose.trim() ? '#10b981' : '#ef4444', fontWeight: 700 }}
               />
             </Box>
           </Paper>

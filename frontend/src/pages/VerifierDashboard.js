@@ -2,10 +2,12 @@ import React, { useState, useEffect } from 'react';
 import {
   Box, Typography, Paper, Table, TableHead, TableRow, TableCell, TableBody,
   Chip, Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField,
-  Stepper, Step, StepLabel, Alert, CircularProgress, Divider, Avatar, Tooltip
+  Stepper, Step, StepLabel, Alert, CircularProgress, Divider, Avatar, Tooltip,
+  IconButton
 } from '@mui/material';
 import {
-  CheckCircle, Cancel, Visibility, CurrencyRupee, Person, Schedule, VerifiedUser
+  CheckCircle, Cancel, Visibility, CurrencyRupee, Person, Schedule, VerifiedUser,
+  ZoomIn, OpenInNew, Close as CloseIcon
 } from '@mui/icons-material';
 import { useApi } from '../hooks/useApi';
 
@@ -51,6 +53,7 @@ const VerifierDashboard = ({ verifierId, title, subtitle, icon, accentColor }) =
   const [comment, setComment] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
   const [actionResult, setActionResult] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null); // lightbox URL
   
   // Comments history state
   const [comments, setComments] = useState([]);
@@ -174,7 +177,7 @@ const VerifierDashboard = ({ verifierId, title, subtitle, icon, accentColor }) =
       {loading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}><CircularProgress /></Box>
       ) : (
-        <Paper sx={{ borderRadius: 3, border: '1px solid rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+        <Paper sx={{ borderRadius: 3, border: '1px solid rgba(255,255,255,0.06)', overflowX: 'auto' }}>
           <Table>
             <TableHead>
               <TableRow sx={{ backgroundColor: `${accentColor}18` }}>
@@ -295,12 +298,59 @@ const VerifierDashboard = ({ verifierId, title, subtitle, icon, accentColor }) =
                         </Box>
                       </Box>
                     ) : (
-                      <Box
-                        component="img"
-                        src={`${API_BASE_URL}/uploads/${selected.file_hash}`}
-                        alt="Invoice"
-                        sx={{ width: '100%', maxHeight: 250, objectFit: 'contain', borderRadius: 2, border: '1px solid rgba(255,255,255,0.1)', backgroundColor: 'rgba(0,0,0,0.2)' }}
-                      />
+                      <Box sx={{ position: 'relative' }}>
+                        <Box
+                          component="img"
+                          src={`${API_BASE_URL}/uploads/${selected.file_hash}`}
+                          alt="Invoice"
+                          onClick={() => setImagePreview(`${API_BASE_URL}/uploads/${selected.file_hash}`)}
+                          sx={{
+                            width: '100%', maxHeight: 250, objectFit: 'contain',
+                            borderRadius: 2, border: '1px solid rgba(255,255,255,0.1)',
+                            backgroundColor: 'rgba(0,0,0,0.2)',
+                            cursor: 'zoom-in',
+                            transition: 'opacity 0.2s',
+                            '&:hover': { opacity: 0.85 }
+                          }}
+                        />
+                        {/* Zoom hint overlay */}
+                        <Box sx={{
+                          position: 'absolute', top: 8, right: 8,
+                          bgcolor: 'rgba(0,0,0,0.55)', borderRadius: 1,
+                          px: 0.8, py: 0.3,
+                          display: 'flex', alignItems: 'center', gap: 0.5,
+                          pointerEvents: 'none'
+                        }}>
+                          <ZoomIn sx={{ fontSize: 14, color: '#fff' }} />
+                          <Typography variant="caption" sx={{ color: '#fff', fontSize: 10 }}>Click to expand</Typography>
+                        </Box>
+                        {/* View Full Image button */}
+                        <Box sx={{ mt: 1, display: 'flex', gap: 1 }}>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            startIcon={<ZoomIn />}
+                            onClick={() => setImagePreview(`${API_BASE_URL}/uploads/${selected.file_hash}`)}
+                            sx={{ flex: 1, borderColor: 'rgba(99,102,241,0.4)', color: '#818cf8',
+                              '&:hover': { borderColor: '#6366f1', bgcolor: 'rgba(99,102,241,0.08)' } }}
+                          >
+                            View Full Image
+                          </Button>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            startIcon={<OpenInNew />}
+                            component="a"
+                            href={`${API_BASE_URL}/uploads/${selected.file_hash}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            sx={{ flex: 1, borderColor: 'rgba(255,255,255,0.15)', color: 'text.secondary',
+                              '&:hover': { borderColor: 'rgba(255,255,255,0.3)', bgcolor: 'rgba(255,255,255,0.04)' } }}
+                          >
+                            Open in Tab
+                          </Button>
+                        </Box>
+                      </Box>
                     )}
                   </Box>
                 );
@@ -398,6 +448,76 @@ const VerifierDashboard = ({ verifierId, title, subtitle, icon, accentColor }) =
             </DialogActions>
           </>
         )}
+      </Dialog>
+
+      {/* ── Full-Image Lightbox ── */}
+      <Dialog
+        open={!!imagePreview}
+        onClose={() => setImagePreview(null)}
+        maxWidth={false}
+        PaperProps={{
+          sx: {
+            background: 'rgba(5,7,15,0.97)',
+            boxShadow: 'none',
+            borderRadius: 3,
+            border: '1px solid rgba(255,255,255,0.08)',
+            m: 1,
+            maxWidth: '95vw',
+            maxHeight: '95vh',
+            position: 'relative',
+          }
+        }}
+      >
+        {/* Close button */}
+        <IconButton
+          onClick={() => setImagePreview(null)}
+          sx={{
+            position: 'absolute', top: 8, right: 8, zIndex: 10,
+            bgcolor: 'rgba(0,0,0,0.6)', color: '#fff',
+            '&:hover': { bgcolor: 'rgba(239,68,68,0.8)' }
+          }}
+        >
+          <CloseIcon />
+        </IconButton>
+
+        <Box sx={{ p: 1.5, textAlign: 'center' }}>
+          <Box
+            component="img"
+            src={imagePreview}
+            alt="Full Invoice"
+            sx={{
+              maxWidth: '90vw',
+              maxHeight: '88vh',
+              objectFit: 'contain',
+              borderRadius: 2,
+              display: 'block',
+              margin: '0 auto',
+            }}
+          />
+          <Box sx={{ mt: 1.5, display: 'flex', justifyContent: 'center', gap: 2 }}>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<OpenInNew />}
+              component="a"
+              href={imagePreview}
+              target="_blank"
+              rel="noopener noreferrer"
+              sx={{ borderColor: 'rgba(99,102,241,0.5)', color: '#818cf8' }}
+            >
+              Open in New Tab
+            </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<CloseIcon />}
+              onClick={() => setImagePreview(null)}
+              sx={{ borderColor: 'rgba(255,255,255,0.15)', color: 'text.secondary' }}
+            >
+              Close
+            </Button>
+          </Box>
+        </Box>
       </Dialog>
     </Box>
   );

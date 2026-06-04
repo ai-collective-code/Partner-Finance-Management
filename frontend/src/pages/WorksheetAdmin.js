@@ -172,7 +172,7 @@ const WorksheetAdmin = () => {
           <Typography color="text.secondary">No worksheets found</Typography>
         </Paper>
       ) : (
-        <Paper sx={{ borderRadius: 3, border: '1px solid rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+        <Paper sx={{ borderRadius: 3, border: '1px solid rgba(255,255,255,0.06)', overflowX: 'auto' }}>
           <Table>
             <TableHead>
               <TableRow sx={{ backgroundColor: 'rgba(99,102,241,0.1)' }}>

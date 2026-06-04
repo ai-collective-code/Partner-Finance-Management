@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Drawer, List, ListItem, ListItemIcon, ListItemText, Typography, Divider, Chip } from '@mui/material';
+import { Box, Drawer, List, ListItem, ListItemIcon, ListItemText, Typography, Divider, Chip, useMediaQuery, useTheme } from '@mui/material';
 import {
   Dashboard as DashboardIcon,
   AccountBalance as AccountBalanceIcon,
@@ -16,11 +16,13 @@ import { useSelector } from 'react-redux';
 
 const drawerWidth = 240;
 
-const Sidebar = () => {
+const Sidebar = ({ mobileOpen, handleDrawerToggle }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useSelector((state) => state.auth);
   const role = user?.role;
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
 
   const menuItems = [
     // ── Everyone
@@ -38,6 +40,7 @@ const Sidebar = () => {
 
     // ── Finance / Owner
     { text: 'Finance Review', icon: <RateReviewIcon />, path: '/finance', roles: ['FIN', 'OWN', 'ADM'] },
+    { text: 'Disbursement Queue', icon: <AccountBalanceIcon />, path: '/finance?status=FIN', roles: ['FIN'] },
     { text: 'Subscriptions', icon: <EventNoteIcon />, path: '/subscriptions', roles: ['FIN', 'OWN', 'ADM'] },
 
     // ── Admin / Owner
@@ -56,31 +59,19 @@ const Sidebar = () => {
 
   const getRoleLabel = (r) => {
     const map = {
-      VRF: '👁️ Verifier',
+      VRF: 'Verifier (1st-Line)',
       FIN: '💼 Finance',
       OWN: '👑 Owner (Debojit)',
-      VND: '🏪 Vendor',
+      VND: 'Partner',
       ADM: '🛡️ Admin',
-      EMP: '👤 Employee',
+      EMP: 'Employee',
       DEV: '👨‍💻 Developer',
     };
     return map[r] || r;
   };
 
-  return (
-    <Drawer
-      variant="permanent"
-      sx={{
-        width: drawerWidth,
-        flexShrink: 0,
-        [`& .MuiDrawer-paper`]: {
-          width: drawerWidth,
-          boxSizing: 'border-box',
-          backgroundColor: '#111827',
-          borderRight: '1px solid rgba(255, 255, 255, 0.05)'
-        },
-      }}
-    >
+  const drawerContent = (
+    <>
       <Box sx={{ p: 2.5 }}>
         <Typography variant="h6" color="primary" sx={{ fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 1 }}>
           <AccountBalanceIcon fontSize="small" /> Ai Finance
@@ -97,7 +88,10 @@ const Sidebar = () => {
             <ListItem
               button
               key={item.text}
-              onClick={() => navigate(item.path)}
+              onClick={() => {
+                navigate(item.path);
+                if (isMobile) handleDrawerToggle();
+              }}
               sx={{
                 mb: 0.5,
                 borderRadius: 2,
@@ -120,7 +114,37 @@ const Sidebar = () => {
           );
         })}
       </List>
-    </Drawer>
+    </>
+  );
+
+  return (
+    <Box component="nav" sx={{ width: { md: drawerWidth }, flexShrink: { md: 0 } }}>
+      {/* Mobile Drawer */}
+      <Drawer
+        variant="temporary"
+        open={mobileOpen}
+        onClose={handleDrawerToggle}
+        ModalProps={{ keepMounted: true }} // Better open performance on mobile.
+        sx={{
+          display: { xs: 'block', md: 'none' },
+          '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth, backgroundColor: '#111827' },
+        }}
+      >
+        {drawerContent}
+      </Drawer>
+      {/* Desktop Drawer */}
+      <Drawer
+        variant="permanent"
+        sx={{
+          display: { xs: 'none', md: 'block' },
+          '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth, backgroundColor: '#111827', borderRight: '1px solid rgba(255, 255, 255, 0.05)' },
+        }}
+        open
+      >
+        {drawerContent}
+      </Drawer>
+    </Box>
+
   );
 };
 

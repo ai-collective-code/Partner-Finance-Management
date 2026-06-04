@@ -14,8 +14,8 @@ import { useSelector } from 'react-redux';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || '';
 
-// New workflow: PND → VRF → FIN → OWN → DSB
-const STATUS_FLOW = ['PND', 'VRF', 'FIN', 'OWN', 'DSB'];
+// New workflow: PND → VRF → OWN → FIN → DSB
+const STATUS_FLOW = ['PND', 'VRF', 'OWN', 'FIN', 'DSB'];
 
 const statusLabel = (s) => ({
   PND: 'Pending Review',
@@ -65,6 +65,19 @@ const FinanceReview = () => {
   const [actionLoading, setActionLoading] = useState(false);
   const [actionResult, setActionResult] = useState(null);
   const [filterStatus, setFilterStatus] = useState('all');
+  const [activeTab, setActiveTab] = useState('requests'); // 'requests' or 'projects'
+
+  // Projects State
+  const [projects, setProjects] = useState([]);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [newProjectCode, setNewProjectCode] = useState('');
+  const [newProjectDetails, setNewProjectDetails] = useState('');
+  const [newPartnerName, setNewPartnerName] = useState('');
+  const [newPartnerPhone, setNewPartnerPhone] = useState('');
+  const [projectLoading, setProjectLoading] = useState(false);
+  const [projectSuccess, setProjectSuccess] = useState('');
+  const [projectError, setProjectError] = useState('');
+  const [editingProjectId, setEditingProjectId] = useState(null);
 
   // Comments history state
   const [comments, setComments] = useState([]);
@@ -87,7 +100,20 @@ const FinanceReview = () => {
     finally { setLoading(false); }
   };
 
-  useEffect(() => { fetchRequests(); }, []); // eslint-disable-line
+  const fetchProjects = async () => {
+    try {
+      const res = await apiFetch('/api/projects');
+      if (res.ok) {
+        const data = await res.json();
+        setProjects(data || []);
+      }
+    } catch (e) { console.error(e); }
+  };
+
+  useEffect(() => { 
+    fetchRequests(); 
+    if (user?.role === 'FIN' || user?.role === 'ADM') fetchProjects();
+  }, [user]); // eslint-disable-line
 
   // Fetch comments when selected request changes
   useEffect(() => {
@@ -125,8 +151,8 @@ const FinanceReview = () => {
       if (res.ok) {
         const stateLabels = {
           VRF: 'sent for 1st-line verification ✅',
-          FIN: 'forwarded to Finance 💼',
           OWN: 'forwarded to Owner 👑',
+          FIN: 'forwarded to Finance 💼',
           DSB: 'disbursed ✅',
           REJ: 'rejected ❌'
         };
@@ -149,7 +175,68 @@ const FinanceReview = () => {
   };
 
   const filtered = filterStatus === 'all' ? requests : requests.filter(r => r.status === filterStatus);
-  const pendingCount = requests.filter(r => ['PND', 'VRF', 'FIN', 'OWN'].includes(r.status)).length;
+  const pendingCount = requests.filter(r => ['PND', 'VRF', 'OWN', 'FIN'].includes(r.status)).length;
+
+  const handleCreateProject = async (e) => {
+    e.preventDefault();
+    if (!newProjectName || !newProjectCode) return;
+    setProjectLoading(true);
+    setProjectSuccess('');
+    setProjectError('');
+    try {
+      const url = editingProjectId ? `/api/projects/${editingProjectId}` : '/api/projects';
+      const method = editingProjectId ? 'PUT' : 'POST';
+
+      const res = await apiFetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newProjectName, code: newProjectCode, details: newProjectDetails, partnerName: newPartnerName, partnerPhone: newPartnerPhone })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setNewProjectName('');
+        setNewProjectCode('');
+        setNewProjectDetails('');
+        setNewPartnerName('');
+        setNewPartnerPhone('');
+        setEditingProjectId(null);
+        setProjectSuccess(editingProjectId ? `Project "${data.name}" successfully updated!` : `Project "${data.name}" successfully saved!`);
+        fetchProjects();
+      } else {
+        const err = await res.json();
+        setProjectError(err.error || 'Failed to save project');
+      }
+    } catch (e) {
+      console.error(e);
+      setProjectError('Network error occurred');
+    }
+    finally { setProjectLoading(false); }
+  };
+
+  const handleStartEditProject = (p) => {
+    setEditingProjectId(p.id);
+    setNewProjectName(p.name);
+    setNewProjectCode(p.code);
+    setNewProjectDetails(p.details || '');
+    setNewPartnerName(p.partner_name || '');
+    setNewPartnerPhone(p.partner_phone || '');
+  };
+
+  const handleCancelEditProject = () => {
+    setEditingProjectId(null);
+    setNewProjectName('');
+    setNewProjectCode('');
+    setNewProjectDetails('');
+    setNewPartnerName('');
+    setNewPartnerPhone('');
+  };
+
+  const handleCompleteProject = async (id) => {
+    try {
+      await apiFetch(`/api/projects/${id}/complete`, { method: 'PUT' });
+      fetchProjects();
+    } catch (e) { console.error(e); }
+  };
 
   const getVerifierInfo = (req) => {
     if (!req.verifier) return null;
@@ -169,15 +256,79 @@ const FinanceReview = () => {
             </Typography>
           </Box>
         </Box>
-        {pendingCount > 0 && (
-          <Chip
-            label={`${pendingCount} Pending Action${pendingCount > 1 ? 's' : ''}`}
-            color="warning" icon={<Schedule />}
-            sx={{ fontWeight: 700 }}
-          />
-        )}
+        <Box sx={{ display: 'flex', gap: 2 }}>
+          {isFin && (
+            <Button variant={activeTab === 'requests' ? 'contained' : 'outlined'} onClick={() => setActiveTab('requests')}>Requests</Button>
+          )}
+          {isFin && (
+            <Button variant={activeTab === 'projects' ? 'contained' : 'outlined'} onClick={() => setActiveTab('projects')}>Projects</Button>
+          )}
+          {pendingCount > 0 && activeTab === 'requests' && (
+            <Chip
+              label={`${pendingCount} Pending Action${pendingCount > 1 ? 's' : ''}`}
+              color="warning" icon={<Schedule />}
+              sx={{ fontWeight: 700 }}
+            />
+          )}
+        </Box>
       </Box>
 
+      {activeTab === 'projects' && isFin && (
+        <Paper sx={{ p: 4, borderRadius: 3 }}>
+          <Typography variant="h5" mb={3}>Project Management</Typography>
+          {projectSuccess && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setProjectSuccess('')}>{projectSuccess}</Alert>}
+          {projectError && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setProjectError('')}>{projectError}</Alert>}
+          <Box component="form" onSubmit={handleCreateProject} sx={{ mb: 2 }}>
+            <Box sx={{ display: 'flex', gap: 2, mb: 2, flexWrap: 'wrap' }}>
+              <TextField label="Project Name" value={newProjectName} onChange={e => setNewProjectName(e.target.value)} required />
+              <TextField label="Project Code" value={newProjectCode} onChange={e => setNewProjectCode(e.target.value)} required />
+              <TextField label="Details" value={newProjectDetails} onChange={e => setNewProjectDetails(e.target.value)} sx={{ flexGrow: 1 }} />
+            </Box>
+            <Box sx={{ display: 'flex', gap: 2, mb: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+              <TextField label="Partner Name" value={newPartnerName} onChange={e => setNewPartnerName(e.target.value)} placeholder="Authorized partner name" />
+              <TextField label="Partner Phone" value={newPartnerPhone} onChange={e => setNewPartnerPhone(e.target.value)} placeholder="+91 XXXXXXXXXX" />
+              <Button type="submit" variant="contained" color={editingProjectId ? "secondary" : "primary"} disabled={projectLoading}>
+                {editingProjectId ? 'Save Changes' : 'Create Project'}
+              </Button>
+              {editingProjectId && (
+                <Button variant="outlined" color="inherit" onClick={handleCancelEditProject}>
+                  Cancel
+                </Button>
+              )}
+            </Box>
+          </Box>
+          <Typography variant="caption" color="warning.main" sx={{ display: 'block', mb: 3 }}>
+            ⚠️ Partner Name & Phone are used for anti-fraud verification. Only the matching partner can submit invoices for this project.
+          </Typography>
+          <Typography variant="h6" mb={2}>Active Projects</Typography>
+          <Table>
+            <TableHead><TableRow><TableCell>Name</TableCell><TableCell>Code</TableCell><TableCell>Partner</TableCell><TableCell>Phone</TableCell><TableCell>Details</TableCell><TableCell>Created</TableCell><TableCell>Action</TableCell></TableRow></TableHead>
+            <TableBody>
+              {projects.map(p => (
+                <TableRow key={p.id}>
+                  <TableCell><strong>{p.name}</strong></TableCell>
+                  <TableCell><Chip label={p.code} size="small" /></TableCell>
+                  <TableCell>{p.partner_name || <Typography variant="caption" color="text.disabled">Not set</Typography>}</TableCell>
+                  <TableCell>{p.partner_phone || <Typography variant="caption" color="text.disabled">Not set</Typography>}</TableCell>
+                  <TableCell>{p.details}</TableCell>
+                  <TableCell>{new Date(p.created_at).toLocaleDateString()}</TableCell>
+                  <TableCell>
+                    <Box sx={{ display: 'flex', gap: 1 }}>
+                      <Button size="small" variant="outlined" color="primary" onClick={() => handleStartEditProject(p)}>Edit</Button>
+                      <Button size="small" color="success" onClick={() => handleCompleteProject(p.id)}>Mark Completed</Button>
+                    </Box>
+                  </TableCell>
+                </TableRow>
+              ))}
+              {projects.length === 0 && <TableRow><TableCell colSpan={7} align="center">No active projects.</TableCell></TableRow>}
+            </TableBody>
+          </Table>
+          <Typography variant="caption" color="text.secondary" sx={{ mt: 2, display: 'block' }}>* Completed projects will automatically be deleted after 30 days.</Typography>
+        </Paper>
+      )}
+
+      {activeTab === 'requests' && (
+        <>
       {/* Workflow Legend */}
       <Paper sx={{ p: 2, mb: 3, borderRadius: 3, background: 'rgba(99,102,241,0.05)', border: '1px solid rgba(99,102,241,0.15)' }}>
         <Typography variant="caption" color="primary" sx={{ fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase' }}>
@@ -185,13 +336,13 @@ const FinanceReview = () => {
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1, flexWrap: 'wrap' }}>
           {[
-            { label: '🏪 Vendor Submits', state: 'PND', color: '#f59e0b' },
+            { label: '🤝 Partner Submits', state: 'PND', color: '#f59e0b' },
             { arrow: true },
             { label: '👁️ 1st Line Verify', state: 'VRF', color: '#3b82f6', sub: 'Rup / Debojit / Yash / Samaja' },
             { arrow: true },
-            { label: '💼 Finance Review', state: 'FIN', color: '#6366f1', sub: 'Yash (Finance Head)' },
-            { arrow: true },
             { label: '👑 Owner Auth', state: 'OWN', color: '#8b5cf6', sub: 'Debojit (Creative Head & Owner)' },
+            { arrow: true },
+            { label: '💼 Finance Review', state: 'FIN', color: '#6366f1', sub: 'Yash (Finance Head)' },
             { arrow: true },
             { label: '✅ Payment', state: 'DSB', color: '#22c55e' },
           ].map((step, i) =>
@@ -216,8 +367,8 @@ const FinanceReview = () => {
           { label: 'Total', value: requests.length, color: '#6366f1' },
           { label: 'Pending', value: requests.filter(r => r.status === 'PND').length, color: '#f59e0b' },
           { label: '1st Verified', value: requests.filter(r => r.status === 'VRF').length, color: '#3b82f6' },
-          { label: 'Finance Review', value: requests.filter(r => r.status === 'FIN').length, color: '#6366f1' },
           { label: 'Owner Auth', value: requests.filter(r => r.status === 'OWN').length, color: '#8b5cf6' },
+          { label: 'Finance Review', value: requests.filter(r => r.status === 'FIN').length, color: '#6366f1' },
           { label: 'Disbursed', value: requests.filter(r => r.status === 'DSB').length, color: '#22c55e' },
         ].map(s => (
           <Paper key={s.label} sx={{ p: 1.5, flex: '1 0 100px', borderRadius: 2, border: `1px solid ${s.color}33`, textAlign: 'center' }}>
@@ -244,7 +395,7 @@ const FinanceReview = () => {
       {loading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}><CircularProgress /></Box>
       ) : (
-        <Paper sx={{ borderRadius: 3, border: '1px solid rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+        <Paper sx={{ borderRadius: 3, border: '1px solid rgba(255,255,255,0.06)', overflowX: 'auto' }}>
           <Table>
             <TableHead>
               <TableRow sx={{ backgroundColor: 'rgba(99,102,241,0.1)' }}>
@@ -297,7 +448,7 @@ const FinanceReview = () => {
                     </TableCell>
                     <TableCell>
                       <Stepper activeStep={stepIndex(req.status)} sx={{ '& .MuiStepLabel-label': { fontSize: 9 }, minWidth: 240 }}>
-                        {['Submit', '1st Verify', 'Finance', 'Owner', 'Paid'].map(l => (
+                        {['Submit', '1st Verify', 'Owner', 'Finance', 'Paid'].map(l => (
                           <Step key={l}><StepLabel>{l}</StepLabel></Step>
                         ))}
                       </Stepper>
@@ -313,6 +464,8 @@ const FinanceReview = () => {
             </TableBody>
           </Table>
         </Paper>
+      )}
+        </>
       )}
 
       {/* ═══════════════════════════════════════════════════════════════════════ */}
@@ -332,9 +485,9 @@ const FinanceReview = () => {
                 </Box>
               </DialogTitle>
               <DialogContent>
-                {/* Workflow Stepper */}
+                 {/* Workflow Stepper */}
                 <Stepper activeStep={stepIndex(selected.status)} sx={{ mb: 3 }}>
-                  {['Submitted', '1st Verified', 'Finance', 'Owner Auth', 'Disbursed'].map(l => (
+                  {['Submitted', '1st Verified', 'Owner Auth', 'Finance', 'Disbursed'].map(l => (
                     <Step key={l}><StepLabel sx={{ '& .MuiStepLabel-label': { fontSize: 11 } }}>{l}</StepLabel></Step>
                   ))}
                 </Stepper>
@@ -348,10 +501,10 @@ const FinanceReview = () => {
                       <Typography variant="h6" fontWeight={700} color="primary.light">Invoice Details</Typography>
                     </Box>
                     
-                    {/* Vendor Info */}
-                    <Typography variant="overline" color="text.disabled" sx={{ letterSpacing: 1 }}>Vendor Information</Typography>
+                    {/* Partner Info */}
+                    <Typography variant="overline" color="text.disabled" sx={{ letterSpacing: 1 }}>Partner Information</Typography>
                     <Grid container spacing={2} sx={{ mb: 2 }}>
-                      <Grid item xs={6}><Typography variant="caption" color="text.secondary">Name</Typography><Typography variant="body2" fontWeight={600}>{meta.vendorName || '—'}</Typography></Grid>
+                      <Grid item xs={6}><Typography variant="caption" color="text.secondary">Name</Typography><Typography variant="body2" fontWeight={600}>{meta.vendorName || meta.partnerName || '—'}</Typography></Grid>
                       <Grid item xs={6}><Typography variant="caption" color="text.secondary">Company</Typography><Typography variant="body2" fontWeight={600}>{meta.companyName || '—'}</Typography></Grid>
                       <Grid item xs={6}><Typography variant="caption" color="text.secondary">Phone</Typography><Typography variant="body2">{meta.phone || '—'}</Typography></Grid>
                       <Grid item xs={3}><Typography variant="caption" color="text.secondary">City</Typography><Typography variant="body2">{meta.city || '—'}</Typography></Grid>
@@ -363,12 +516,54 @@ const FinanceReview = () => {
                     <Typography variant="overline" color="text.disabled" sx={{ letterSpacing: 1 }}>Project Details</Typography>
                     <Grid container spacing={2} sx={{ mb: 2 }}>
                       <Grid item xs={6}><Typography variant="caption" color="text.secondary">Project</Typography><Typography variant="body2" fontWeight={600}>{meta.projectName || '—'}</Typography></Grid>
-                      <Grid item xs={6}><Typography variant="caption" color="text.secondary">Department</Typography><Typography variant="body2">{meta.department || '—'}</Typography></Grid>
+                      <Grid item xs={6}><Typography variant="caption" color="text.secondary">Job Description</Typography><Typography variant="body2">{meta.jobDescription || meta.department || '—'}</Typography></Grid>
                       <Grid item xs={6}><Typography variant="caption" color="text.secondary">Project Head</Typography><Typography variant="body2">{meta.projectHead || '—'}</Typography></Grid>
                       <Grid item xs={3}><Typography variant="caption" color="text.secondary">Start</Typography><Typography variant="body2">{meta.startDate || '—'}</Typography></Grid>
                       <Grid item xs={3}><Typography variant="caption" color="text.secondary">End</Typography><Typography variant="body2">{meta.endDate || '—'}</Typography></Grid>
                     </Grid>
                     <Divider sx={{ my: 1.5, borderColor: 'rgba(255,255,255,0.06)' }} />
+
+                    {/* Bank & Cheque Details */}
+                    {(meta.bankName || meta.chequeFileHash) && (
+                      <>
+                        <Typography variant="overline" color="text.disabled" sx={{ letterSpacing: 1 }}>Bank & Payment Information</Typography>
+                        <Grid container spacing={2} sx={{ mb: 2, mt: 0.5 }}>
+                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Beneficiary Name</Typography><Typography variant="body2" fontWeight={600}>{meta.beneficiaryName || '—'}</Typography></Grid>
+                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Bank Name</Typography><Typography variant="body2" fontWeight={600}>{meta.bankName || '—'}</Typography></Grid>
+                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Branch Name</Typography><Typography variant="body2">{meta.branchName || '—'}</Typography></Grid>
+                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">IFSC Code</Typography><Typography variant="body2" fontFamily="monospace" fontWeight={600}>{meta.ifscCode || '—'}</Typography></Grid>
+                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Account Number</Typography><Typography variant="body2" fontFamily="monospace">{meta.accountNumber || '—'}</Typography></Grid>
+                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Account Type</Typography><Typography variant="body2">{meta.accountType || '—'}</Typography></Grid>
+                          {meta.chequeFileHash && (
+                            <Grid item xs={12} sx={{ mt: 1 }}>
+                              <Typography variant="caption" color="success.main" sx={{ display: 'block', mb: 0.5, fontWeight: 700 }}>
+                                📸 Attached Cancelled Cheque
+                              </Typography>
+                              {meta.chequeFileHash.toLowerCase().endsWith('.pdf') ? (
+                                <Box sx={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden' }}>
+                                  <iframe
+                                    src={`${API_BASE_URL}/uploads/${meta.chequeFileHash}`}
+                                    title="Cancelled Cheque PDF"
+                                    width="100%"
+                                    height="250px"
+                                    style={{ border: 'none', backgroundColor: '#fff', borderRadius: 4 }}
+                                  />
+                                </Box>
+                              ) : (
+                                <Box 
+                                  component="img"
+                                  src={`${API_BASE_URL}/uploads/${meta.chequeFileHash}`}
+                                  alt="Cancelled Cheque"
+                                  sx={{ maxWidth: '100%', maxHeight: 200, objectFit: 'contain', borderRadius: 2, border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer' }}
+                                  onClick={() => setFullImage(`${API_BASE_URL}/uploads/${meta.chequeFileHash}`)}
+                                />
+                              )}
+                            </Grid>
+                          )}
+                        </Grid>
+                        <Divider sx={{ my: 1.5, borderColor: 'rgba(255,255,255,0.06)' }} />
+                      </>
+                    )}
 
                     {/* Financial Breakdown */}
                     <Typography variant="overline" color="text.disabled" sx={{ letterSpacing: 1 }}>Financial Summary</Typography>
@@ -436,13 +631,13 @@ const FinanceReview = () => {
                   </Box>
                 )}
 
-                {/* ── ORIGINAL VENDOR INVOICE ── */}
+                {/* ── ORIGINAL PARTNER INVOICE ── */}
                 {selected.file_hash && (() => {
                   const isPdf = selected.file_hash.toLowerCase().endsWith('.pdf');
                   return (
                     <Paper sx={{ p: 2, mb: 3, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(0,0,0,0.3)' }}>
                       <Typography variant="overline" color="text.disabled" sx={{ letterSpacing: 1, mb: 1, display: 'block' }}>
-                        📄 Original Vendor Invoice
+                        📄 Original Partner Invoice
                       </Typography>
                       {isPdf ? (
                         <Box sx={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden' }}>
@@ -471,7 +666,7 @@ const FinanceReview = () => {
                           <Box
                             component="img"
                             src={`${API_BASE_URL}/uploads/${selected.file_hash}`}
-                            alt="Original Vendor Invoice"
+                            alt="Original Partner Invoice"
                             sx={{ width: '100%', maxHeight: 400, objectFit: 'contain', borderRadius: 2, border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer' }}
                             onClick={() => setFullImage(`${API_BASE_URL}/uploads/${selected.file_hash}`)}
                           />
@@ -503,7 +698,7 @@ const FinanceReview = () => {
                           FIN: '💼 Finance',
                           OWN: '👑 Owner',
                           ADM: '🛡️ Admin',
-                          VND: '🏪 Vendor',
+                          VND: '🤝 Partner',
                         }[log.actor_role] || log.actor_role || 'System';
 
                         return (
@@ -563,22 +758,22 @@ const FinanceReview = () => {
                 {/* Contextual guidance per role & status */}
                 {selected.status === 'PND' && isVrf && (
                   <Alert severity="info" sx={{ fontSize: 12 }} icon={<VerifiedUser />}>
-                    <strong>First-Line Verification:</strong> As {vInfo ? vInfo.name : 'Verifier'}, review this request and either verify it (send to Finance) or reject it.
+                    <strong>First-Line Verification:</strong> As {vInfo ? vInfo.name : 'Verifier'}, review this request and either verify it (send to Owner) or reject it.
                   </Alert>
                 )}
-                {selected.status === 'VRF' && isFin && (
-                  <Alert severity="info" sx={{ fontSize: 12 }} icon={<AccountBalance />}>
-                    <strong>Finance Review (Yash):</strong> First-line verification is complete. Review financials and forward to Owner (Debojit) for authorization.
-                  </Alert>
-                )}
-                {selected.status === 'FIN' && isOwner && (
+                {selected.status === 'VRF' && isOwner && (
                   <Alert severity="info" sx={{ fontSize: 12 }} icon={<Gavel />}>
-                    <strong>Owner Authorization (Debojit):</strong> Finance has reviewed. Authorize payment or reject.
+                    <strong>Owner Authorization (Debojit):</strong> First-line verification is complete. Authorize payment or reject.
                   </Alert>
                 )}
-                {selected.status === 'OWN' && isStrictFin && (
+                {selected.status === 'OWN' && isFin && (
+                  <Alert severity="info" sx={{ fontSize: 12 }} icon={<AccountBalance />}>
+                    <strong>Finance Review (Yash):</strong> Owner has authorized. Review financials and prepare for disbursement.
+                  </Alert>
+                )}
+                {selected.status === 'FIN' && isStrictFin && (
                   <Alert severity="success" sx={{ fontSize: 12 }}>
-                    <strong>Ready for Disbursement:</strong> Owner (Debojit) has authorized. You can now disburse the payment.
+                    <strong>Ready for Disbursement:</strong> All approvals are complete. You can now disburse the payment.
                   </Alert>
                 )}
                 {selected.status === 'DSB' && (
@@ -601,18 +796,8 @@ const FinanceReview = () => {
                   </>
                 )}
 
-                {/* STAGE 2: VRF → FIN */}
-                {selected.status === 'VRF' && isFin && (
-                  <>
-                    <Button startIcon={<Cancel />} color="error" variant="outlined" onClick={() => doAction('REJ')} disabled={actionLoading}>Reject</Button>
-                    <Button startIcon={<Send />} variant="contained" color="primary" onClick={() => doAction('FIN')} disabled={actionLoading}>
-                      {actionLoading ? <CircularProgress size={18} color="inherit" /> : '💼 Finance Review'}
-                    </Button>
-                  </>
-                )}
-
-                {/* STAGE 3: FIN → OWN */}
-                {selected.status === 'FIN' && isOwner && (
+                {/* STAGE 2: VRF → OWN */}
+                {selected.status === 'VRF' && isOwner && (
                   <>
                     <Button startIcon={<Cancel />} color="error" variant="outlined" onClick={() => doAction('REJ')} disabled={actionLoading}>Reject</Button>
                     <Button startIcon={<Gavel />} variant="contained" color="secondary" onClick={() => doAction('OWN')} disabled={actionLoading}>
@@ -621,8 +806,18 @@ const FinanceReview = () => {
                   </>
                 )}
 
-                {/* STAGE 4: OWN → DSB */}
-                {selected.status === 'OWN' && isStrictFin && (
+                {/* STAGE 3: OWN → FIN */}
+                {selected.status === 'OWN' && isFin && (
+                  <>
+                    <Button startIcon={<Cancel />} color="error" variant="outlined" onClick={() => doAction('REJ')} disabled={actionLoading}>Reject</Button>
+                    <Button startIcon={<Send />} variant="contained" color="primary" onClick={() => doAction('FIN')} disabled={actionLoading}>
+                      {actionLoading ? <CircularProgress size={18} color="inherit" /> : '💼 Finance Review'}
+                    </Button>
+                  </>
+                )}
+
+                {/* STAGE 4: FIN → DSB */}
+                {selected.status === 'FIN' && isStrictFin && (
                   <Button startIcon={<CheckCircle />} variant="contained" color="success" onClick={() => doAction('DSB')} disabled={actionLoading}>
                     {actionLoading ? <CircularProgress size={18} color="inherit" /> : '💰 Disburse Payment'}
                   </Button>

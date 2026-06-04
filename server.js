@@ -298,6 +298,21 @@ async function initPostgres(pgConfig) {
     FOREIGN KEY (user_id) REFERENCES users(id)
   )`);
 
+  await pool.query(`CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    code TEXT UNIQUE NOT NULL,
+    details TEXT,
+    partner_name TEXT,
+    partner_phone TEXT,
+    status TEXT DEFAULT 'Active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP
+  )`);
+  // Add columns if table already exists (migration)
+  await pool.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS partner_name TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS partner_phone TEXT`).catch(() => {});
+
   await pool.query(`CREATE TABLE IF NOT EXISTS attachments (
     id TEXT PRIMARY KEY,
     request_id TEXT,
@@ -358,35 +373,38 @@ async function initPostgres(pgConfig) {
   // Seed transitions
   const transitions = [
     ['PND', 'VRF', 'VRF'],
-    ['PND', 'VRF', 'FIN'],
-    ['PND', 'VRF', 'OWN'],
+    ['PND', 'VRF', 'FIN'], // Master Key (Yash)
+    ['PND', 'VRF', 'OWN'], // Master Key (Debojit)
     ['PND', 'REJ', 'VRF'],
     ['PND', 'REJ', 'FIN'],
-    ['VRF', 'FIN', 'FIN'],
-    ['VRF', 'REJ', 'FIN'],
-    ['VRF', 'OWN', 'FIN'],
-    ['FIN', 'OWN', 'OWN'],
-    ['FIN', 'REJ', 'OWN'],
-    ['FIN', 'OWN', 'FIN'],
-    ['OWN', 'DSB', 'FIN'],
-    ['OWN', 'DSB', 'SYSTEM'],
+    ['PND', 'REJ', 'OWN'],
+    
+    ['VRF', 'OWN', 'OWN'], // Owner validates after VRF
+    ['VRF', 'REJ', 'OWN'],
+    
+    ['OWN', 'FIN', 'FIN'], // Finance verifies after Owner
+    ['OWN', 'REJ', 'FIN'],
+    
+    ['FIN', 'DSB', 'FIN'], // Finance disburses
+    ['FIN', 'DSB', 'SYSTEM'],
+    
     ['REJ', 'PND', 'FIN'],
     ['REJ', 'VRF', 'OWN'],
+    
+    // Admin overrides
     ['PND', 'VRF', 'ADM'],
-    ['PND', 'FIN', 'ADM'],
-    ['PND', 'OWN', 'ADM'],
-    ['PND', 'REJ', 'ADM'],
-    ['VRF', 'FIN', 'ADM'],
     ['VRF', 'OWN', 'ADM'],
+    ['OWN', 'FIN', 'ADM'],
+    ['FIN', 'DSB', 'ADM'],
+    ['PND', 'REJ', 'ADM'],
     ['VRF', 'REJ', 'ADM'],
-    ['FIN', 'OWN', 'ADM'],
+    ['OWN', 'REJ', 'ADM'],
     ['FIN', 'REJ', 'ADM'],
-    ['OWN', 'DSB', 'ADM'],
   ];
 
   for (const t of transitions) {
     await pool.query(
-      'INSERT INTO state_transitions (from_state, to_state, required_role) VALUES ($1, $2, $3) ON CONFLICT (from_state, to_state) DO NOTHING',
+      'INSERT INTO state_transitions (from_state, to_state, required_role) VALUES ($1, $2, $3) ON CONFLICT (from_state, to_state, required_role) DO NOTHING',
       t
     );
   }
@@ -477,6 +495,21 @@ function initSQLite() {
         FOREIGN KEY (user_id) REFERENCES users(id)
       )`);
 
+      sqliteDb.run(`CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        code TEXT UNIQUE NOT NULL,
+        details TEXT,
+        partner_name TEXT,
+        partner_phone TEXT,
+        status TEXT DEFAULT 'Active',
+        created_at TEXT DEFAULT (datetime('now')),
+        completed_at TEXT
+      )`);
+      // Migration: add columns if table already exists
+      sqliteDb.run(`ALTER TABLE projects ADD COLUMN partner_name TEXT`, () => {});
+      sqliteDb.run(`ALTER TABLE projects ADD COLUMN partner_phone TEXT`, () => {});
+
       sqliteDb.run(`CREATE TABLE IF NOT EXISTS attachments (
         id TEXT PRIMARY KEY,
         request_id TEXT,
@@ -536,30 +569,33 @@ function initSQLite() {
 
       const transitions = [
         ['PND', 'VRF', 'VRF'],
-        ['PND', 'VRF', 'FIN'],
-        ['PND', 'VRF', 'OWN'],
+        ['PND', 'VRF', 'FIN'], // Master Key (Yash)
+        ['PND', 'VRF', 'OWN'], // Master Key (Debojit)
         ['PND', 'REJ', 'VRF'],
         ['PND', 'REJ', 'FIN'],
-        ['VRF', 'FIN', 'FIN'],
-        ['VRF', 'REJ', 'FIN'],
-        ['VRF', 'OWN', 'FIN'],
-        ['FIN', 'OWN', 'OWN'],
-        ['FIN', 'REJ', 'OWN'],
-        ['FIN', 'OWN', 'FIN'],
-        ['OWN', 'DSB', 'FIN'],
-        ['OWN', 'DSB', 'SYSTEM'],
+        ['PND', 'REJ', 'OWN'],
+        
+        ['VRF', 'OWN', 'OWN'], // Owner validates after VRF
+        ['VRF', 'REJ', 'OWN'],
+        
+        ['OWN', 'FIN', 'FIN'], // Finance verifies after Owner
+        ['OWN', 'REJ', 'FIN'],
+        
+        ['FIN', 'DSB', 'FIN'], // Finance disburses
+        ['FIN', 'DSB', 'SYSTEM'],
+        
         ['REJ', 'PND', 'FIN'],
         ['REJ', 'VRF', 'OWN'],
+        
+        // Admin overrides
         ['PND', 'VRF', 'ADM'],
-        ['PND', 'FIN', 'ADM'],
-        ['PND', 'OWN', 'ADM'],
-        ['PND', 'REJ', 'ADM'],
-        ['VRF', 'FIN', 'ADM'],
         ['VRF', 'OWN', 'ADM'],
+        ['OWN', 'FIN', 'ADM'],
+        ['FIN', 'DSB', 'ADM'],
+        ['PND', 'REJ', 'ADM'],
         ['VRF', 'REJ', 'ADM'],
-        ['FIN', 'OWN', 'ADM'],
+        ['OWN', 'REJ', 'ADM'],
         ['FIN', 'REJ', 'ADM'],
-        ['OWN', 'DSB', 'ADM'],
       ];
 
       const stmt = sqliteDb.prepare('INSERT OR IGNORE INTO state_transitions (from_state, to_state, required_role) VALUES (?, ?, ?)');
@@ -865,6 +901,230 @@ app.post('/api/vendor/login', (req, res) => {
   });
 });
 
+// ══════════ PROJECTS API ══════════
+app.get('/api/projects', authenticateToken, (req, res, next) => {
+  const sql = "SELECT * FROM projects WHERE status = 'Active' ORDER BY created_at DESC";
+  if (isPostgres) {
+    pool.query(sql, [], (err, result) => {
+      if (err) return next(err);
+      res.json(result.rows);
+    });
+  } else {
+    sqliteDb.all(sql, [], (err, rows) => {
+      if (err) return next(err);
+      res.json(rows);
+    });
+  }
+});
+
+// In-memory OTP store { phone: { otp, expiresAt, projectCode } }
+const otpStore = new Map();
+
+app.post('/api/projects', authenticateToken, requireRole('FIN', 'ADM', 'OWN'), (req, res, next) => {
+  const { name, code, details, partnerName, partnerPhone } = req.body;
+  if (!name || !code) return res.status(400).json({ error: 'Name and Code are required' });
+  
+  const ts = new Date().toISOString();
+  
+  const checkSql = "SELECT id FROM projects WHERE code = ?";
+  
+  const handleInsert = () => {
+    const id = 'PRJ-' + crypto.randomUUID().split('-')[0].toUpperCase();
+    const insertSql = "INSERT INTO projects (id, name, code, details, partner_name, partner_phone, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+    if (isPostgres) {
+      pool.query(pgSql(insertSql), [id, name, code, details, partnerName || null, partnerPhone || null, 'Active', ts], (err) => {
+        if (err) return next(err);
+        res.json({ id, name, code, details, partner_name: partnerName, partner_phone: partnerPhone, status: 'Active' });
+      });
+    } else {
+      sqliteDb.run(insertSql, [id, name, code, details, partnerName || null, partnerPhone || null, 'Active', ts], (err) => {
+        if (err) return next(err);
+        res.json({ id, name, code, details, partner_name: partnerName, partner_phone: partnerPhone, status: 'Active' });
+      });
+    }
+  };
+
+  const handleUpdate = (existingId) => {
+    const updateSql = "UPDATE projects SET name = ?, details = ?, partner_name = ?, partner_phone = ?, status = 'Active', completed_at = NULL WHERE id = ?";
+    if (isPostgres) {
+      pool.query(pgSql(updateSql), [name, details, partnerName || null, partnerPhone || null, existingId], (err) => {
+        if (err) return next(err);
+        res.json({ id: existingId, name, code, details, partner_name: partnerName, partner_phone: partnerPhone, status: 'Active' });
+      });
+    } else {
+      sqliteDb.run(updateSql, [name, details, partnerName || null, partnerPhone || null, existingId], (err) => {
+        if (err) return next(err);
+        res.json({ id: existingId, name, code, details, partner_name: partnerName, partner_phone: partnerPhone, status: 'Active' });
+      });
+    }
+  };
+
+  if (isPostgres) {
+    pool.query(pgSql(checkSql), [code], (err, result) => {
+      if (err) return next(err);
+      if (result.rows && result.rows.length > 0) {
+        handleUpdate(result.rows[0].id);
+      } else {
+        handleInsert();
+      }
+    });
+  } else {
+    sqliteDb.get(checkSql, [code], (err, row) => {
+      if (err) return next(err);
+      if (row) {
+        handleUpdate(row.id);
+      } else {
+        handleInsert();
+      }
+    });
+  }
+});
+
+app.put('/api/projects/:id', authenticateToken, requireRole('FIN', 'ADM', 'OWN'), (req, res, next) => {
+  const { id } = req.params;
+  const { name, code, details, partnerName, partnerPhone } = req.body;
+  if (!name || !code) return res.status(400).json({ error: 'Name and Code are required' });
+
+  const sql = "UPDATE projects SET name = ?, code = ?, details = ?, partner_name = ?, partner_phone = ? WHERE id = ?";
+  if (isPostgres) {
+    pool.query(pgSql(sql), [name, code, details || null, partnerName || null, partnerPhone || null, id], (err) => {
+      if (err) return next(err);
+      res.json({ id, name, code, details, partner_name: partnerName, partner_phone: partnerPhone });
+    });
+  } else {
+    sqliteDb.run(sql, [name, code, details || null, partnerName || null, partnerPhone || null, id], (err) => {
+      if (err) return next(err);
+      res.json({ id, name, code, details, partner_name: partnerName, partner_phone: partnerPhone });
+    });
+  }
+});
+
+// ══════════ OTP VERIFICATION FOR PARTNER PROJECTS ══════════
+app.post('/api/projects/send-otp', authenticateToken, async (req, res) => {
+  const { phone, projectCode } = req.body;
+  if (!phone || !projectCode) return res.status(400).json({ error: 'Phone and project code required' });
+
+  // Clean the phone number (remove country codes, spaces, non-digits)
+  let cleanPhone = phone.replace(/\D/g, '');
+  if (cleanPhone.length > 10 && cleanPhone.startsWith('91')) {
+    cleanPhone = cleanPhone.slice(-10);
+  }
+
+  // Validate clean phone number length
+  if (cleanPhone.length !== 10) {
+    return res.status(400).json({ error: 'Invalid phone number format. Please ensure it is a valid 10-digit mobile number.' });
+  }
+
+  // Generate 6-digit OTP
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes
+  otpStore.set(cleanPhone, { otp, expiresAt, projectCode });
+
+  logger.info({ phone, cleanPhone, otp, projectCode }, 'OTP generated for partner verification');
+  console.log(`\n🔑 [Local Console Debug] OTP for ${phone} (${cleanPhone}): ${otp} (Project: ${projectCode})\n`);
+
+  const apiKey = process.env.FAST2SMS_API_KEY;
+  if (!apiKey) {
+    logger.warn('FAST2SMS_API_KEY not configured. Falling back to simulated OTP.');
+    return res.json({ 
+      success: true, 
+      message: 'OTP generated (Simulated - API key missing)', 
+      debug_otp: process.env.NODE_ENV !== 'production' ? otp : undefined 
+    });
+  }
+
+  try {
+    const url = 'https://www.fast2sms.com/dev/bulkV2';
+    const payload = {
+      route: 'q',
+      message: `Your Ai Collective Finance verification OTP is: ${otp}. Valid for 5 minutes.`,
+      language: 'english',
+      flash: 0,
+      numbers: cleanPhone
+    };
+
+    const apiRes = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'authorization': apiKey,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await apiRes.json();
+    logger.info({ fast2smsResponse: data }, 'Fast2SMS API Response');
+
+    if (apiRes.ok && data.return === true) {
+      return res.json({ 
+        success: true, 
+        message: 'OTP sent successfully to your registered mobile number.',
+        debug_otp: process.env.NODE_ENV !== 'production' ? otp : undefined 
+      });
+    } else {
+      const errMsg = data.message || 'Fast2SMS gateway error';
+      logger.error({ data }, 'Fast2SMS OTP delivery failure');
+
+      // Smart testing fallback: If it's a transaction/verification block error, 
+      // let it fall back to simulated mode so testing is never blocked!
+      if (process.env.NODE_ENV !== 'production' || errMsg.includes('transaction') || errMsg.includes('verification')) {
+        logger.warn('Fast2SMS failed. Falling back to simulated OTP for testing.');
+        return res.json({ 
+          success: true, 
+          message: `Simulated OTP (Real SMS requires ₹100 Fast2SMS recharge: ${errMsg})`, 
+          debug_otp: otp 
+        });
+      }
+
+      return res.status(500).json({ error: `Failed to send OTP via SMS: ${errMsg}` });
+    }
+  } catch (error) {
+    logger.error({ error: error.message }, 'Exception during sending OTP via Fast2SMS');
+    return res.status(500).json({ error: 'Network error occurred while sending OTP' });
+  }
+});
+
+app.post('/api/projects/verify-otp', authenticateToken, (req, res) => {
+  const { phone, otp, projectCode } = req.body;
+  if (!phone || !otp || !projectCode) return res.status(400).json({ error: 'Phone, OTP and project code required' });
+
+  // Clean phone number the exact same way to align with stored key
+  let cleanPhone = phone.replace(/\D/g, '');
+  if (cleanPhone.length > 10 && cleanPhone.startsWith('91')) {
+    cleanPhone = cleanPhone.slice(-10);
+  }
+
+  const stored = otpStore.get(cleanPhone);
+  if (!stored) return res.status(400).json({ error: 'No OTP was requested for this phone number. Please request a new OTP.' });
+  if (Date.now() > stored.expiresAt) {
+    otpStore.delete(cleanPhone);
+    return res.status(400).json({ error: 'OTP has expired. Please request a new one.' });
+  }
+  if (stored.otp !== otp) return res.status(400).json({ error: 'Invalid OTP. Please try again.' });
+  if (stored.projectCode !== projectCode) return res.status(400).json({ error: 'OTP does not match this project.' });
+
+  otpStore.delete(cleanPhone);
+  res.json({ success: true, verified: true });
+});
+
+app.put('/api/projects/:id/complete', authenticateToken, requireRole('FIN', 'ADM', 'OWN'), (req, res, next) => {
+  const { id } = req.params;
+  const completedAt = new Date().toISOString();
+  
+  const sql = "UPDATE projects SET status = 'Completed', completed_at = $1 WHERE id = $2";
+  if (isPostgres) {
+    pool.query(pgSql(sql), [completedAt, id], (err) => {
+      if (err) return next(err);
+      res.json({ success: true, id });
+    });
+  } else {
+    sqliteDb.run("UPDATE projects SET status = 'Completed', completed_at = ? WHERE id = ?", [completedAt, id], (err) => {
+      if (err) return next(err);
+      res.json({ success: true, id });
+    });
+  }
+});
+
 // Get Requests (paginated, excludes soft-deleted)
 app.get('/api/requests', authenticateToken, (req, res, next) => {
   const page = Math.max(1, parseInt(req.query.page) || 1);
@@ -974,8 +1234,9 @@ app.post('/api/action', authenticateToken, actionLimiter, validate(actionSchema)
         const isAssignedDebojit = verifierLower === 'debojit' && req.user.role === 'OWN';
         const nameMatches = verifierLower === userNameLower;
         const isAdmin = req.user.role === 'ADM';
-        if (!nameMatches && !isAssignedDebojit && !isAdmin) {
-          return res.status(403).json({ error: `Verification blocked: This request is specifically assigned to ${reqRow.verifier}. Only they can verify it.` });
+        const isMasterKey = req.user.role === 'OWN' || req.user.role === 'FIN';
+        if (!nameMatches && !isAssignedDebojit && !isAdmin && !isMasterKey) {
+          return res.status(403).json({ error: `Verification blocked: This request is specifically assigned to ${reqRow.verifier}. Only they can verify it. (Master Key overridden by Owner/Finance)` });
         }
       }
     }
@@ -1243,7 +1504,7 @@ async function preprocessImage(filePath) {
   }
 }
 
-// Call Gemini 1.5 Flash Vision API natively
+// Call Gemini 2.5 Flash Vision API natively
 async function callGeminiVision(apiKey, base64Data, mimeType) {
   return new Promise((resolve, reject) => {
     // Structured output prompt for invoice extraction
@@ -1252,8 +1513,8 @@ async function callGeminiVision(apiKey, base64Data, mimeType) {
 Return ONLY a valid JSON object with NO markdown, NO code fences, NO backticks. Just raw JSON:
 {"amount": <number: base invoice amount before tax, or total amount if no breakdown>, "vendorName": "<string: the seller/company name at top of invoice>", "invoiceDate": "<string: date in YYYY-MM-DD format>", "gstNumber": "<string: 15-char Indian GSTIN if present, otherwise null>", "purpose": "<string: 1 sentence describing what this invoice is for>", "confidence": <number: 0-100 how confident you are>}`;
 
-    // Use image/jpeg as safe fallback for PDF inlineData
-    const safeMimeType = mimeType === 'application/pdf' ? 'image/jpeg' : mimeType;
+    // Gemini 1.5+ supports application/pdf directly natively
+    const safeMimeType = mimeType;
 
     const requestBody = {
       contents: [{

@@ -124,7 +124,7 @@ const VendorPortal = () => {
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 4 }}>
         <Receipt sx={{ color: '#6366f1', fontSize: 30 }} />
         <Box>
-          <Typography variant="h4" fontWeight={700}>Vendor Portal</Typography>
+          <Typography variant="h4" fontWeight={700}>Partner Portal</Typography>
           <Typography variant="body2" color="text.secondary">Upload invoices for automatic extraction & Finance review</Typography>
         </Box>
       </Box>

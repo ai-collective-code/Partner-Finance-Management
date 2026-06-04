@@ -1,8 +1,8 @@
 import React from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
-import { Box, AppBar, Toolbar, Typography, IconButton, Avatar, Menu, MenuItem, Chip, Divider } from '@mui/material';
+import { Box, AppBar, Toolbar, Typography, IconButton, Avatar, Menu, MenuItem, Chip, Divider, useMediaQuery, useTheme } from '@mui/material';
 import { SignedIn, SignedOut, SignIn, SignOutButton } from '@clerk/clerk-react';
-import { ExitToApp, Person } from '@mui/icons-material';
+import { ExitToApp, Person, Menu as MenuIcon } from '@mui/icons-material';
 import Sidebar from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
 import SubmitRequest from './pages/SubmitRequest';
@@ -30,12 +30,16 @@ const ROLE_LABELS = {
 // Inner layout for authenticated users (Clerk or Vendor)
 function AuthenticatedLayout() {
   const [anchorEl, setAnchorEl] = React.useState(null);
+  const [mobileOpen, setMobileOpen] = React.useState(false);
   const { user } = useSelector(state => state.auth);
   const dispatch = useDispatch();
   const navigate = useNavigate();
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
 
   const handleMenu = (event) => setAnchorEl(event.currentTarget);
   const handleClose = () => setAnchorEl(null);
+  const handleDrawerToggle = () => setMobileOpen(!mobileOpen);
 
   const roleInfo = ROLE_LABELS[user?.role] || { label: user?.role, color: '#6366f1' };
   const isVendor = user?.role === 'VND';
@@ -49,13 +53,18 @@ function AuthenticatedLayout() {
   };
 
   return (
-    <Box sx={{ display: 'flex', minHeight: '100vh' }}>
-      <Sidebar />
-      <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+    <Box sx={{ display: 'flex', minHeight: '100vh', flexDirection: isMobile ? 'column' : 'row' }}>
+      <Sidebar mobileOpen={mobileOpen} handleDrawerToggle={handleDrawerToggle} />
+      <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', minWidth: 0, width: isMobile ? '100%' : 'calc(100% - 240px)' }}>
         <AppBar position="static" elevation={0} sx={{ backgroundColor: '#0b0f19', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-          <Toolbar sx={{ minHeight: 56 }}>
-            <Typography variant="body1" component="div" sx={{ flexGrow: 1, color: 'text.secondary', fontSize: 14 }}>
-              Financial Disbursement Platform
+          <Toolbar sx={{ minHeight: 56, px: { xs: 1, sm: 2 } }}>
+            {isMobile && (
+              <IconButton color="inherit" aria-label="open drawer" edge="start" onClick={handleDrawerToggle} sx={{ mr: 1 }}>
+                <MenuIcon />
+              </IconButton>
+            )}
+            <Typography variant="body1" component="div" sx={{ flexGrow: 1, color: 'text.secondary', fontSize: { xs: 12, sm: 14 } }} noWrap>
+              Ai Finance
             </Typography>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
               {/* Role Badge */}
@@ -109,7 +118,7 @@ function AuthenticatedLayout() {
             </Box>
           </Toolbar>
         </AppBar>
-        <Box component="main" sx={{ flexGrow: 1, p: 3, backgroundColor: '#0b0f19', overflow: 'auto' }}>
+        <Box component="main" sx={{ flexGrow: 1, p: { xs: 1.5, sm: 3 }, backgroundColor: '#0b0f19', overflowX: 'hidden' }}>
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/submit" element={<SubmitRequest />} />

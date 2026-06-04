@@ -8,4 +8,4 @@ finance.db-shm
 frontend/node_modules/
 frontend/.env
 uploads/
-
+scratch/

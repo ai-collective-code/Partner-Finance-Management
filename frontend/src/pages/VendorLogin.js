@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import {
   Box, Typography, TextField, Button, Paper, Alert, CircularProgress,
-  InputAdornment, IconButton, Divider
+  InputAdornment, IconButton, Divider, Avatar
 } from '@mui/material';
-import { Visibility, VisibilityOff, Store, Lock, ArrowBack } from '@mui/icons-material';
+import { Visibility, VisibilityOff, Storefront as StorefrontIcon, Lock, ArrowBack } from '@mui/icons-material';
 import { useDispatch } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { setAuth } from '../store/authSlice';
@@ -22,7 +22,7 @@ const VendorLogin = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!vendorId || !password) {
-      setError('Please enter both Vendor ID and Password.');
+      setError('Please enter both Partner ID and Password.');
       return;
     }
 
@@ -68,19 +68,14 @@ const VendorLogin = () => {
       }}>
         {/* Header */}
         <Box sx={{ textAlign: 'center', mb: 4 }}>
-          <Box sx={{
-            width: 64, height: 64, borderRadius: '50%', mx: 'auto', mb: 2,
-            background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: '0 8px 24px rgba(99,102,241,0.3)'
-          }}>
-            <Store sx={{ color: '#fff', fontSize: 32 }} />
-          </Box>
-          <Typography variant="h5" fontWeight={700} color="white">
-            Vendor Portal
+          <Avatar sx={{ m: 'auto', bgcolor: '#6366f1', width: 56, height: 56, mb: 2 }}>
+            <StorefrontIcon fontSize="large" />
+          </Avatar>
+          <Typography variant="h4" fontWeight={700} color="primary" gutterBottom>
+            Partner Portal
           </Typography>
-          <Typography variant="body2" color="text.secondary" mt={0.5}>
-            Sign in with your Vendor ID and Password
+          <Typography variant="body2" color="text.secondary">
+            Sign in with your Partner ID and Password
           </Typography>
         </Box>
 
@@ -92,16 +87,18 @@ const VendorLogin = () => {
 
         <form onSubmit={handleSubmit}>
           <TextField
+            required
             fullWidth
-            label="Vendor ID"
+            label="Partner ID"
             value={vendorId}
             onChange={(e) => setVendorId(e.target.value)}
-            placeholder="e.g. vendor001"
+            placeholder="e.g. partner001"
+            disabled={loading}
             sx={{ mb: 2.5 }}
             InputProps={{
               startAdornment: (
                 <InputAdornment position="start">
-                  <Store sx={{ color: 'text.secondary', fontSize: 20 }} />
+                  <StorefrontIcon sx={{ color: 'text.secondary', fontSize: 20 }} />
                 </InputAdornment>
               )
             }}
@@ -136,14 +133,9 @@ const VendorLogin = () => {
             variant="contained"
             fullWidth
             disabled={loading}
-            sx={{
-              py: 1.5, fontSize: '1rem', fontWeight: 600,
-              background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-              '&:hover': { background: 'linear-gradient(135deg, #5558e6, #7c4fea)' },
-              borderRadius: 2
-            }}
+            sx={{ py: 1.5, fontSize: '1.1rem', fontWeight: 600, borderRadius: 2 }}
           >
-            {loading ? <CircularProgress size={24} color="inherit" /> : '🏪 Sign In as Vendor'}
+            {loading ? <CircularProgress size={24} color="inherit" /> : '🤝 Sign In as Partner'}
           </Button>
         </form>
 
