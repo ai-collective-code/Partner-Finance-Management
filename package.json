@@ -2,7 +2,7 @@
   "name": "ai-collective-finance",
   "version": "1.0.0",
   "description": "",
-  "main": "app.js",
+  "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "build": "npm install && cd frontend && npm install && npm run build",
