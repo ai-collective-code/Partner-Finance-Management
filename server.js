@@ -645,7 +645,7 @@ function signAuditEntry(reqId, actor, prev, next, comment, ts) {
 const EMAIL_ROLE_MAP = {
   'rayabakash@gmail.com':      { role: 'DEV', name: 'Abakash' },
   'abakashray57@gmail.com':    { role: 'EMP', name: 'Abakash' },
-  'abakashray772@gmail.com':   { role: 'VRF', name: 'Rup' },
+  'bitmyth2005@gmail.com':   { role: 'VRF', name: 'Rup' },
   'abakashray846@gmail.com':   { role: 'VRF', name: 'Samaja' },
   'finance@aicollective.agency': { role: 'FIN', name: 'Yash' },
   'debojit@aicollective.agency': { role: 'OWN', name: 'Debojit' },
