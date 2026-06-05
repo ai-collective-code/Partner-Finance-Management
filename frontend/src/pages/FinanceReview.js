@@ -37,12 +37,12 @@ const statusColor = (s) => ({
 
 const stepIndex = (s) => Math.max(0, STATUS_FLOW.indexOf(s));
 
-// The 4 first-line verifiers (Samaja replaces Sukanya)
+// The 4 first-line verifiers (Soumana replaces Sukanya)
 const VERIFIER_MAP = {
   rup:     { name: 'Rup',     title: 'Tech Head',           color: '#3b82f6' },
   debojit: { name: 'Debojit', title: 'Creative Head & Owner', color: '#8b5cf6' },
   yash:    { name: 'Yash',    title: 'Finance Head',        color: '#22c55e' },
-  samaja:  { name: 'Samaja',  title: 'Content Head',        color: '#f59e0b' },
+  soumana:  { name: 'Soumana',  title: 'Content Head',        color: '#f59e0b' },
 };
 
 // Parse metadata safely
@@ -338,7 +338,7 @@ const FinanceReview = () => {
           {[
             { label: '🤝 Partner Submits', state: 'PND', color: '#f59e0b' },
             { arrow: true },
-            { label: '👁️ 1st Line Verify', state: 'VRF', color: '#3b82f6', sub: 'Rup / Debojit / Yash / Samaja' },
+            { label: '👁️ 1st Line Verify', state: 'VRF', color: '#3b82f6', sub: 'Rup / Debojit / Yash / Soumana' },
             { arrow: true },
             { label: '👑 Owner Auth', state: 'OWN', color: '#8b5cf6', sub: 'Debojit (Creative Head & Owner)' },
             { arrow: true },

@@ -34,7 +34,7 @@ const Sidebar = ({ mobileOpen, handleDrawerToggle }) => {
     // ── Worksheet for employees/devs only (NOT vendor, NOT finance)
     { text: 'Daily Worksheet', icon: <AssignmentIcon />, path: '/worksheet', roles: ['EMP', 'DEV', 'ADM'] },
 
-    // ── Verifier dashboards (Rup = Tech, Samaja = Content)
+    // ── Verifier dashboards (Rup = Tech, Soumana = Content)
     { text: '🔧 Tech Dashboard', icon: <EngineeringIcon />, path: '/tech-dashboard', roles: ['VRF', 'ADM'] },
     { text: '🎨 Content Dashboard', icon: <PaletteIcon />, path: '/content-dashboard', roles: ['VRF', 'ADM'] },
 
@@ -51,8 +51,8 @@ const Sidebar = ({ mobileOpen, handleDrawerToggle }) => {
   const filteredMenuItems = menuItems.filter(item => {
     if (item.roles && !item.roles.includes(role)) return false;
     if (role === 'VRF') {
-      if (item.path === '/tech-dashboard' && !userName.includes('rup') && userName.includes('samaja')) return false;
-      if (item.path === '/content-dashboard' && !userName.includes('samaja') && userName.includes('rup')) return false;
+      if (item.path === '/tech-dashboard' && !userName.includes('rup') && userName.includes('soumana')) return false;
+      if (item.path === '/content-dashboard' && !userName.includes('soumana') && userName.includes('rup')) return false;
     }
     return true;
   });

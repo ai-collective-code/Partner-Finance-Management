@@ -10,7 +10,7 @@ const VERIFIER_MAP = {
   rup:     { name: 'Rup',     color: '#3b82f6' },
   debojit: { name: 'Debojit', color: '#8b5cf6' },
   yash:    { name: 'Yash',    color: '#22c55e' },
-  samaja:  { name: 'Samaja',  color: '#f59e0b' },
+  soumana:  { name: 'Soumana',  color: '#f59e0b' },
 };
 
 const getStatusColor = (status) => ({
@@ -79,7 +79,7 @@ const Dashboard = () => {
         {[
           { label: '🏪 Vendor', color: '#6366f1' },
           { arrow: true },
-          { label: '👁️ 1st Verify', color: '#3b82f6', sub: 'Rup/Debojit/Yash/Samaja' },
+          { label: '👁️ 1st Verify', color: '#3b82f6', sub: 'Rup/Debojit/Yash/Soumana' },
           { arrow: true },
           { label: '💼 Finance', color: '#6366f1', sub: 'Yash' },
           { arrow: true },

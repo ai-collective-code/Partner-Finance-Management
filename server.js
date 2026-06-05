@@ -646,7 +646,7 @@ const EMAIL_ROLE_MAP = {
   'rayabakash@gmail.com':      { role: 'DEV', name: 'Abakash' },
   'abakashray57@gmail.com':    { role: 'EMP', name: 'Abakash' },
   'bitmyth2005@gmail.com':   { role: 'VRF', name: 'Rup' },
-  'abakashray846@gmail.com':   { role: 'VRF', name: 'Samaja' },
+  'abakashray846@gmail.com':   { role: 'VRF', name: 'Soumana' },
   'finance@aicollective.agency': { role: 'FIN', name: 'Yash' },
   'debojit@aicollective.agency': { role: 'OWN', name: 'Debojit' },
   'cse2022017@rcciit.org.in':  { role: 'ADM', name: 'Admin' },
@@ -1206,7 +1206,7 @@ app.get('/api/verifiers', authenticateToken, (req, res) => {
     { id: 'rup',     name: 'Rup',     title: 'Tech Head',      role: 'VRF', avatar: 'R', color: '#3b82f6' },
     { id: 'debojit', name: 'Debojit', title: 'Creative Head & Owner', role: 'OWN', avatar: 'D', color: '#8b5cf6' },
     { id: 'yash',    name: 'Yash',    title: 'Finance Head',   role: 'FIN', avatar: 'Y', color: '#22c55e' },
-    { id: 'samaja',  name: 'Samaja',  title: 'Content Head',   role: 'VRF', avatar: 'S', color: '#f59e0b' },
+    { id: 'soumana',  name: 'Soumana',  title: 'Content Head',   role: 'VRF', avatar: 'S', color: '#f59e0b' },
   ];
   res.json(verifiers);
 });

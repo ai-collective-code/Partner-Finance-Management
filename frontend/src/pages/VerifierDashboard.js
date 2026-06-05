@@ -33,11 +33,11 @@ const statusColor = (s) => ({
 const stepIndex = (s) => Math.max(0, STATUS_FLOW.indexOf(s));
 
 /**
- * VerifierDashboard — Shared component for Rup (Tech) and Samaja (Content).
+ * VerifierDashboard — Shared component for Rup (Tech) and Soumana (Content).
  * Shows ONLY requests assigned to this verifier for privacy.
  *
  * Props:
- *   verifierId: 'rup' | 'samaja'
+ *   verifierId: 'rup' | 'soumana'
  *   title: Display title
  *   subtitle: Display subtitle
  *   icon: emoji/icon string
@@ -534,12 +534,12 @@ export const TechDashboard = () => (
   />
 );
 
-// ── Samaja's Content Dashboard ──
+// ── Soumana's Content Dashboard ──
 export const ContentDashboard = () => (
   <VerifierDashboard
-    verifierId="samaja"
+    verifierId="soumana"
     title="Content Head Dashboard"
-    subtitle="Requests assigned to Samaja for first-line content verification"
+    subtitle="Requests assigned to Soumana for first-line content verification"
     icon="🎨"
     accentColor="#f59e0b"
   />

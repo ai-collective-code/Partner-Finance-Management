@@ -25,7 +25,7 @@ const VERIFIERS = [
   { id: 'rup',     name: 'Rup',     title: 'Tech Head',           icon: <Engineering />, color: '#3b82f6', bg: 'rgba(59,130,246,0.1)' },
   { id: 'debojit', name: 'Debojit', title: 'Creative Head & Owner', icon: <Person />,    color: '#8b5cf6', bg: 'rgba(139,92,246,0.1)' },
   { id: 'yash',    name: 'Yash',    title: 'Finance Head',        icon: <AccountBalance />, color: '#22c55e', bg: 'rgba(34,197,94,0.1)' },
-  // { id: 'SAMAJA', name: 'Samaja', title: 'Content Verifier', color: '#ec4899', bg: 'rgba(236,72,153,0.05)' },
+  // { id: 'SOUMANA', name: 'Soumana', title: 'Content Verifier', color: '#ec4899', bg: 'rgba(236,72,153,0.05)' },
 ];
 
 const JOB_DESCRIPTIONS = ['Voice Own', 'AI Operator', 'AI Video Artist', 'Music', 'Scripting', 'Production', 'Sound Mixing', 'Story Board', 'Others'];
