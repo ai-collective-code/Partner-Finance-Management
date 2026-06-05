@@ -1764,7 +1764,25 @@ app.post('/api/invoices/upload', authenticateToken, upload.single('invoice'), as
   if (!req.file) return res.status(400).json({ error: 'No file uploaded. Field name must be "invoice".' });
 
   const file = req.file;
-  logger.info({ filename: file.filename, size: file.size, mime: file.mimetype }, 'Invoice file uploaded for processing');
+  const skipOcr = req.body.skip_ocr === 'true' || req.body.skip_ocr === true;
+  logger.info({ filename: file.filename, size: file.size, mime: file.mimetype, skipOcr }, 'Invoice file uploaded for processing');
+
+  // If skip_ocr is set (e.g. for cancelled cheque / bank doc uploads), skip AI OCR for speed
+  if (skipOcr) {
+    return res.json({
+      success: true,
+      file_hash: file.filename,
+      filename: file.originalname,
+      file_size: file.size,
+      extracted_amount: 0,
+      vendor_name: '',
+      invoice_date: '',
+      gst_number: '',
+      purpose: '',
+      ocr_confidence: 0,
+      ocr_engine: 'Skipped (bank document)'
+    });
+  }
 
   try {
     const ocrData = await processInvoiceOCR(file.path, file.originalname, file.mimetype);

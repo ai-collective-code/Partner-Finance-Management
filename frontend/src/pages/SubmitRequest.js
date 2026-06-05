@@ -25,10 +25,10 @@ const VERIFIERS = [
   { id: 'rup',     name: 'Rup',     title: 'Tech Head',           icon: <Engineering />, color: '#3b82f6', bg: 'rgba(59,130,246,0.1)' },
   { id: 'debojit', name: 'Debojit', title: 'Creative Head & Owner', icon: <Person />,    color: '#8b5cf6', bg: 'rgba(139,92,246,0.1)' },
   { id: 'yash',    name: 'Yash',    title: 'Finance Head',        icon: <AccountBalance />, color: '#22c55e', bg: 'rgba(34,197,94,0.1)' },
-  { id: 'SAMAJA', name: 'Samaja', title: 'Content Verifier', color: '#ec4899', bg: 'rgba(236,72,153,0.05)' },
+  // { id: 'SAMAJA', name: 'Samaja', title: 'Content Verifier', color: '#ec4899', bg: 'rgba(236,72,153,0.05)' },
 ];
 
-const JOB_DESCRIPTIONS = ['voice own', 'Ai Operator', 'AI Video artist', 'Music', 'scripting', 'production', 'sound mixing', 'story board', 'others'];
+const JOB_DESCRIPTIONS = ['Voice Own', 'AI Operator', 'AI Video Artist', 'Music', 'Scripting', 'Production', 'Sound Mixing', 'Story Board', 'Others'];
 
 const INDIA_CITIES = {
   "Mumbai": "Maharashtra", "Delhi": "Delhi", "Bengaluru": "Karnataka", 
@@ -285,6 +285,8 @@ const SubmitRequest = () => {
   };
 
   // Dynamic GST Calculation Logic
+  // CGST + SGST when vendor is in the same state as company (Maharashtra)
+  // IGST when vendor is in any other state (including Uttar Pradesh)
   useEffect(() => {
     const base = parseFloat(baseAmount) || 0;
     if (isGst) {
@@ -292,8 +294,10 @@ const SubmitRequest = () => {
       setGstAmount(gAmt);
       setTotalAmount(base + gAmt);
       if (state === OUR_COMPANY_STATE) {
+        // Same state as our company (Maharashtra) → CGST + SGST
         setGstType(`CGST (${gstPercentage/2}%) & SGST (${gstPercentage/2}%)`);
       } else if (state) {
+        // Different state from our company → IGST (inter-state)
         setGstType(`IGST (${gstPercentage}%)`);
       } else {
         setGstType('Select State for GST breakdown');
@@ -350,10 +354,11 @@ const SubmitRequest = () => {
     const file = e.target.files[0];
     if (!file) return;
 
-    setChequeUploadMessage('Uploading cancelled cheque...');
+    setChequeUploadMessage('Uploading bank document...');
     setChequeUploading(true);
     const formData = new FormData();
     formData.append('invoice', file); // Multer expects the field name "invoice"
+    formData.append('skip_ocr', 'true'); // Skip AI OCR for cheque/bank docs — just store file
 
     try {
       const res = await apiFetch('/api/invoices/upload', {
@@ -363,14 +368,14 @@ const SubmitRequest = () => {
       if (res.ok) {
         const data = await res.json();
         setChequeFileHash(data.file_hash);
-        setChequeUploadMessage('✅ Cancelled cheque uploaded successfully!');
+        setChequeUploadMessage('✅ Bank document uploaded successfully!');
       } else {
         const data = await res.json().catch(() => ({}));
         setChequeUploadMessage(data.error || '❌ Upload failed.');
       }
     } catch (err) {
       console.error(err);
-      setChequeUploadMessage('❌ Network error uploading cheque.');
+      setChequeUploadMessage('❌ Network error uploading bank document.');
     } finally {
       setChequeUploading(false);
     }
@@ -947,7 +952,7 @@ const SubmitRequest = () => {
             <Grid item xs={12}>
               <FormControlLabel 
                 control={<Switch checked={isGst} onChange={(e) => setIsGst(e.target.checked)} color="primary" />} 
-                label={`Apply GST (Fixed 18%: ${state === 'Maharashtra' ? '9% CGST + 9% SGST' : '18% IGST'})`} 
+                label={`Apply GST (Fixed 18%: ${state === OUR_COMPANY_STATE ? '9% CGST + 9% SGST' : state ? '18% IGST' : '18% IGST'})`} 
               />
             </Grid>
           </Grid>
@@ -964,7 +969,7 @@ const SubmitRequest = () => {
                 </Grid>
                   <Grid item xs={12}>
                     <Typography variant="body2" color="text.secondary">
-                      <strong>Calculated Tax:</strong> {state === 'Maharashtra' ? 'CGST (9%) + SGST (9%)' : 'IGST (18%)'} = ₹{gstAmount.toFixed(2)}
+                      <strong>Calculated Tax:</strong> {state === OUR_COMPANY_STATE ? 'CGST (9%) + SGST (9%)' : 'IGST (18%)'} = ₹{gstAmount.toFixed(2)}
                     </Typography>
                   </Grid>
               </Grid>
@@ -1027,7 +1032,7 @@ const SubmitRequest = () => {
             <Grid item xs={12}>
               <Box sx={{ p: 2.5, border: '1px dashed rgba(16,185,129,0.4)', borderRadius: 2, bgcolor: 'rgba(16,185,129,0.02)' }}>
                 <Typography variant="subtitle2" color="success.main" mb={1.5} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  📸 Upload Cancelled Cheque / Passbook Scan (Image/PDF)
+                  📸 Upload Cancelled Cheque / Any Bank Document (Image/PDF)
                 </Typography>
                 <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
                   {!chequeFileHash ? (
