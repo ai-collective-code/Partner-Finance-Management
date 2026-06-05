@@ -40,7 +40,7 @@ const Sidebar = ({ mobileOpen, handleDrawerToggle }) => {
 
     // ── Finance / Owner
     { text: 'Finance Review', icon: <RateReviewIcon />, path: '/finance', roles: ['FIN', 'OWN', 'ADM'] },
-    { text: 'Disbursement Queue', icon: <AccountBalanceIcon />, path: '/finance?status=FIN', roles: ['FIN'] },
+
     { text: 'Subscriptions', icon: <EventNoteIcon />, path: '/subscriptions', roles: ['FIN', 'OWN', 'ADM'] },
 
     // ── Admin / Owner
