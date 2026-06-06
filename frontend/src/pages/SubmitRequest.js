@@ -215,7 +215,7 @@ const SubmitRequest = () => {
 
       // If project has a partner phone, OTP is required
       if (matchedProject.partner_phone) {
-        setOtpRequired(true);
+        setOtpRequired(false);
         setPhone(matchedProject.partner_phone);
       }
     }
@@ -861,7 +861,7 @@ const SubmitRequest = () => {
               )}
 
               {/* Phone OTP Check */}
-              {selectedProject.partner_phone && (
+              {selectedProject.partner_phone && otpRequired && (
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   {otpVerified ? (
                     <CheckCircle sx={{ color: 'success.main', fontSize: 20 }} />
