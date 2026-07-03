@@ -20,6 +20,14 @@ const validate = require('./middleware/validate');
 // Structured Logger
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 
+// Fail fast rather than silently signing/authenticating with a well-known default secret
+for (const name of ['VENDOR_JWT_SECRET', 'AUDIT_SECRET']) {
+  if (!process.env[name]) {
+    logger.error(`${name} is not set in the environment. Refusing to start with a guessable default secret — set ${name} in .env.`);
+    process.exit(1);
+  }
+}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -51,9 +59,9 @@ app.use(helmet({
 app.use(compression());
 
 // CORS - scoped origins (include React dev server port 3001)
-const allowedOrigins = process.env.ALLOWED_ORIGINS 
-  ? process.env.ALLOWED_ORIGINS.split(',') 
-  : ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:3001', 'http://127.0.0.1:3001'];
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',')
+  : ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:3001', 'http://127.0.0.1:3001', 'http://localhost:3002', 'http://127.0.0.1:3002'];
 app.use(cors({ origin: allowedOrigins, credentials: true }));
 
 // Rate limiting
@@ -72,14 +80,24 @@ const actionLimiter = rateLimit({
   message: { error: 'Action rate limit exceeded.' }
 });
 
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many login attempts. Please try again later.' }
+});
+
 app.use(express.json({ limit: '10mb' }));
 
-// Serve static frontend files (if frontend/build exists, serve it, otherwise serve root for local vanilla files)
+// Serve the built frontend if present. Deliberately no fallback to serving __dirname —
+// doing so would expose server.js, finance.db, .env.example, node_modules, etc. to the
+// public internet whenever the frontend hasn't been built yet.
 const frontendBuildPath = path.join(__dirname, 'frontend', 'build');
 if (fs.existsSync(frontendBuildPath)) {
   app.use(express.static(frontendBuildPath));
 } else {
-  app.use(express.static(path.join(__dirname)));
+  logger.warn('frontend/build not found — run "npm run build" to serve the UI. Static file serving is disabled until then.');
 }
 
 // Set trust proxy for correct IP (needed because React proxy adds X-Forwarded-For)
@@ -635,7 +653,7 @@ async function initDb() {
 initDb();
 
 // ══════════ HELPER: HMAC Audit Signature ══════════
-const AUDIT_SECRET = process.env.AUDIT_SECRET || 'default-audit-hmac-key';
+const AUDIT_SECRET = process.env.AUDIT_SECRET;
 function signAuditEntry(reqId, actor, prev, next, comment, ts) {
   const payload = `${reqId}|${actor}|${prev}|${next}|${comment}|${ts}`;
   return crypto.createHmac('sha256', AUDIT_SECRET).update(payload).digest('hex');
@@ -658,23 +676,64 @@ function getRoleByEmail(email) {
 }
 
 // ══════════ VENDOR AUTH (Simple ID/Password, No Clerk) ══════════
-const VENDOR_JWT_SECRET = process.env.VENDOR_JWT_SECRET || 'vendor-jwt-secret-key-2024';
+const VENDOR_JWT_SECRET = process.env.VENDOR_JWT_SECRET;
 const jwt = require('jsonwebtoken');
 
-// Default vendor accounts (seeded into DB on startup)
+// Salted password hashing (scrypt) — stored as "scrypt:<saltHex>:<hashHex>".
+// verifyPassword() also accepts legacy unsalted-SHA256 hashes (64 hex chars) so
+// existing DB rows keep working, and transparently upgrades them on next login.
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `scrypt:${salt}:${hash}`;
+}
+
+function verifyPassword(password, stored) {
+  if (!stored) return false;
+  if (stored.startsWith('scrypt:')) {
+    const [, salt, hash] = stored.split(':');
+    const candidate = crypto.scryptSync(password, salt, 64).toString('hex');
+    const a = Buffer.from(candidate, 'hex');
+    const b = Buffer.from(hash, 'hex');
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  }
+  // Legacy unsalted SHA-256 hash
+  const legacyHash = crypto.createHash('sha256').update(password).digest('hex');
+  const a = Buffer.from(legacyHash, 'utf8');
+  const b = Buffer.from(stored, 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+// Default local (non-Clerk) accounts seeded into DB on startup. Change these passwords
+// immediately in production — set DEFAULT_VENDOR_PASSWORD / DEFAULT_EMPLOYEE_PASSWORD.
 const DEFAULT_VENDORS = [
-  { id: 'vendor001', password: 'vendor123', name: 'Default Vendor' },
+  { id: 'vendor001', password: process.env.DEFAULT_VENDOR_PASSWORD || 'vendor123', name: 'Default Vendor' },
+];
+const DEFAULT_EMPLOYEES = [
+  { id: 'employee001', password: process.env.DEFAULT_EMPLOYEE_PASSWORD || 'employee123', name: 'Default Employee' },
 ];
 
-function initVendorAccounts() {
-  DEFAULT_VENDORS.forEach(v => {
-    const hashedPw = crypto.createHash('sha256').update(v.password).digest('hex');
+function seedLocalAccounts(accounts, role, envVarName) {
+  if (!process.env[envVarName]) {
+    logger.warn(`${envVarName} not set — using the built-in default ${role} password. Set it in .env before going to production.`);
+  }
+  accounts.forEach(v => {
+    const hashedPw = hashPassword(v.password);
     db.run('INSERT OR IGNORE INTO users (id, name, role, hash, updated_at) VALUES (?, ?, ?, ?, ?)',
-      [v.id, v.name, 'VND', hashedPw, new Date().toISOString()]);
-    // Force update the password in case it was previously stored differently
-    db.run('UPDATE users SET hash = ?, name = ? WHERE id = ?', [hashedPw, v.name, v.id]);
+      [v.id, v.name, role, hashedPw, new Date().toISOString()]);
+    // Only seed/reset the password if this row doesn't already have a hash from a real login flow.
+    db.get('SELECT hash FROM users WHERE id = ?', [v.id], (err, row) => {
+      if (!err && row && !row.hash) {
+        db.run('UPDATE users SET hash = ?, name = ? WHERE id = ?', [hashedPw, v.name, v.id]);
+      }
+    });
   });
-  logger.info('Vendor accounts initialized and forcefully updated');
+}
+
+function initVendorAccounts() {
+  seedLocalAccounts(DEFAULT_VENDORS, 'VND', 'DEFAULT_VENDOR_PASSWORD');
+  seedLocalAccounts(DEFAULT_EMPLOYEES, 'EMP', 'DEFAULT_EMPLOYEE_PASSWORD');
+  logger.info('Vendor and employee local accounts initialized');
 }
 
 // Initialize vendor accounts (called automatically when DB initialization completes)
@@ -688,14 +747,14 @@ async function authenticateToken(req, res, next) {
     }
     const token = authHeader.split(' ')[1];
     
-    // ── Try Vendor JWT first (vendor tokens start with 'VND-' prefix in the payload) ──
+    // ── Try local (non-Clerk) Vendor/Employee JWT first ──
     try {
-      const vendorPayload = jwt.verify(token, VENDOR_JWT_SECRET);
-      if (vendorPayload && vendorPayload.vendorId) {
-        // This is a vendor token
-        db.get('SELECT * FROM users WHERE id = ?', [vendorPayload.vendorId], (err, user) => {
+      const localPayload = jwt.verify(token, VENDOR_JWT_SECRET);
+      const localId = localPayload && (localPayload.vendorId || localPayload.employeeId);
+      if (localId) {
+        db.get('SELECT * FROM users WHERE id = ?', [localId], (err, user) => {
           if (err) return next(err);
-          if (!user) return res.status(401).json({ error: 'Vendor account not found' });
+          if (!user) return res.status(401).json({ error: 'Account not found' });
           req.user = user;
           req.clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
           req.clientAgent = req.headers['user-agent'] || 'unknown';
@@ -703,8 +762,8 @@ async function authenticateToken(req, res, next) {
         });
         return;
       }
-    } catch (vendorErr) {
-      // Not a vendor token, continue to Clerk verification
+    } catch (localErr) {
+      // Not a local vendor/employee token, continue to Clerk verification
     }
 
     // ── Verify the Clerk JWT token ──
@@ -767,7 +826,7 @@ async function authenticateToken(req, res, next) {
     });
   } catch (err) {
     logger.warn({ err: err.message }, 'Token verification failed');
-    return res.status(401).json({ error: 'Token verification failed', detail: err.message });
+    return res.status(401).json({ error: 'Token verification failed' });
   }
 }
 
@@ -868,21 +927,24 @@ app.get('/api/me', authenticateToken, (req, res) => {
 // });
 
 // ══════════ VENDOR LOGIN (Simple ID/Password) ══════════
-app.post('/api/vendor/login', (req, res) => {
+app.post('/api/vendor/login', loginLimiter, (req, res) => {
   const { vendorId, password } = req.body;
   if (!vendorId || !password) {
     return res.status(400).json({ error: 'Vendor ID and Password are required' });
   }
 
-  const hashedPw = crypto.createHash('sha256').update(password).digest('hex');
-  
-  db.get('SELECT * FROM users WHERE id = ? AND role = ? AND hash = ?', [vendorId, 'VND', hashedPw], (err, user) => {
+  db.get('SELECT * FROM users WHERE id = ? AND role = ?', [vendorId, 'VND'], (err, user) => {
     if (err) {
       logger.error({ err }, 'Vendor login DB error');
       return res.status(500).json({ error: 'Internal server error' });
     }
-    if (!user) {
+    if (!user || !verifyPassword(password, user.hash)) {
       return res.status(401).json({ error: 'Invalid Vendor ID or Password' });
+    }
+
+    // Transparently migrate legacy unsalted-SHA256 hashes to salted scrypt on successful login
+    if (!user.hash.startsWith('scrypt:')) {
+      db.run('UPDATE users SET hash = ? WHERE id = ?', [hashPassword(password), user.id]);
     }
 
     // Generate a vendor JWT
@@ -897,6 +959,43 @@ app.post('/api/vendor/login', (req, res) => {
       success: true,
       token: vendorToken,
       user: { id: user.id, name: user.name, role: 'VND' }
+    });
+  });
+});
+
+// ══════════ EMPLOYEE LOGIN (Simple ID/Password) ══════════
+app.post('/api/employee/login', loginLimiter, (req, res) => {
+  const { employeeId, password } = req.body;
+  if (!employeeId || !password) {
+    return res.status(400).json({ error: 'Employee ID and Password are required' });
+  }
+
+  db.get('SELECT * FROM users WHERE id = ? AND role = ?', [employeeId, 'EMP'], (err, user) => {
+    if (err) {
+      logger.error({ err }, 'Employee login DB error');
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+    if (!user || !verifyPassword(password, user.hash)) {
+      return res.status(401).json({ error: 'Invalid Employee ID or Password' });
+    }
+
+    // Transparently migrate legacy unsalted-SHA256 hashes to salted scrypt on successful login
+    if (!user.hash.startsWith('scrypt:')) {
+      db.run('UPDATE users SET hash = ? WHERE id = ?', [hashPassword(password), user.id]);
+    }
+
+    // Generate an employee JWT
+    const employeeToken = jwt.sign(
+      { employeeId: user.id, name: user.name, role: 'EMP' },
+      VENDOR_JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    logger.info({ employeeId: user.id }, 'Employee logged in successfully');
+    res.json({
+      success: true,
+      token: employeeToken,
+      user: { id: user.id, name: user.name, role: 'EMP' }
     });
   });
 });
@@ -1015,21 +1114,23 @@ app.post('/api/projects/send-otp', authenticateToken, async (req, res) => {
     return res.status(400).json({ error: 'Invalid phone number format. Please ensure it is a valid 10-digit mobile number.' });
   }
 
-  // Generate 6-digit OTP
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  // Generate 6-digit OTP using a CSPRNG (Math.random() is not suitable for security codes)
+  const otp = crypto.randomInt(100000, 1000000).toString();
   const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes
   otpStore.set(cleanPhone, { otp, expiresAt, projectCode });
 
-  logger.info({ phone, cleanPhone, otp, projectCode }, 'OTP generated for partner verification');
-  console.log(`\n🔑 [Local Console Debug] OTP for ${phone} (${cleanPhone}): ${otp} (Project: ${projectCode})\n`);
+  logger.info({ phone, cleanPhone, projectCode }, 'OTP generated for partner verification');
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`\n🔑 [Local Console Debug] OTP for ${phone} (${cleanPhone}): ${otp} (Project: ${projectCode})\n`);
+  }
 
   const apiKey = process.env.FAST2SMS_API_KEY;
   if (!apiKey) {
     logger.warn('FAST2SMS_API_KEY not configured. Falling back to simulated OTP.');
-    return res.json({ 
-      success: true, 
-      message: 'OTP generated (Simulated - API key missing)', 
-      debug_otp: process.env.NODE_ENV !== 'production' ? otp : undefined 
+    return res.json({
+      success: true,
+      message: 'OTP generated (Simulated - API key missing)',
+      debug_otp: process.env.NODE_ENV === 'development' ? otp : undefined
     });
   }
 
@@ -1056,23 +1157,25 @@ app.post('/api/projects/send-otp', authenticateToken, async (req, res) => {
     logger.info({ fast2smsResponse: data }, 'Fast2SMS API Response');
 
     if (apiRes.ok && data.return === true) {
-      return res.json({ 
-        success: true, 
+      return res.json({
+        success: true,
         message: 'OTP sent successfully to your registered mobile number.',
-        debug_otp: process.env.NODE_ENV !== 'production' ? otp : undefined 
+        debug_otp: process.env.NODE_ENV === 'development' ? otp : undefined
       });
     } else {
       const errMsg = data.message || 'Fast2SMS gateway error';
       logger.error({ data }, 'Fast2SMS OTP delivery failure');
 
-      // Smart testing fallback: If it's a transaction/verification block error, 
-      // let it fall back to simulated mode so testing is never blocked!
-      if (process.env.NODE_ENV !== 'production' || errMsg.includes('transaction') || errMsg.includes('verification')) {
-        logger.warn('Fast2SMS failed. Falling back to simulated OTP for testing.');
-        return res.json({ 
-          success: true, 
-          message: `Simulated OTP (Real SMS requires ₹100 Fast2SMS recharge: ${errMsg})`, 
-          debug_otp: otp 
+      // Smart testing fallback: only in explicit local development do we fall back to a
+      // simulated OTP — this must never trigger based on the gateway's error message alone,
+      // otherwise an attacker could intentionally provoke that error to have the real OTP
+      // handed back in the response body, bypassing phone verification entirely.
+      if (process.env.NODE_ENV === 'development') {
+        logger.warn('Fast2SMS failed. Falling back to simulated OTP for local development.');
+        return res.json({
+          success: true,
+          message: `Simulated OTP (Real SMS requires ₹100 Fast2SMS recharge: ${errMsg})`,
+          debug_otp: otp
         });
       }
 
@@ -1285,26 +1388,43 @@ app.get('/api/audit', authenticateToken, (req, res, next) => {
   const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
   const offset = (page - 1) * limit;
   const reqId = req.query.reqId;
+  // DEV/EMP/VND only ever see requests they submitted themselves (mirrors /api/requests scoping) —
+  // everyone else (FIN/OWN/ADM/VRF) legitimately needs cross-request audit visibility.
+  const isRestricted = ['DEV', 'EMP', 'VND'].includes(req.user.role);
 
   if (reqId) {
     // Fetch logs for a specific request, join with users to get actor names
     const countQuery = "SELECT COUNT(*) as total FROM audit_logs WHERE reqId = ?";
     const dataQuery = "SELECT a.*, u.name as actor_name, u.role as actor_role FROM audit_logs a LEFT JOIN users u ON a.actor = u.id WHERE a.reqId = ? ORDER BY a.id ASC LIMIT ? OFFSET ?";
-    
-    db.get(countQuery, [reqId], (err, countRow) => {
-      if (err) return next(err);
-      db.all(dataQuery, [reqId, limit, offset], (err, rows) => {
+
+    const runQuery = () => {
+      db.get(countQuery, [reqId], (err, countRow) => {
         if (err) return next(err);
-        res.json({
-          data: rows,
-          pagination: {
-            page, limit,
-            total: countRow ? countRow.total : 0,
-            totalPages: Math.ceil((countRow ? countRow.total : 0) / limit)
-          }
+        db.all(dataQuery, [reqId, limit, offset], (err, rows) => {
+          if (err) return next(err);
+          res.json({
+            data: rows,
+            pagination: {
+              page, limit,
+              total: countRow ? countRow.total : 0,
+              totalPages: Math.ceil((countRow ? countRow.total : 0) / limit)
+            }
+          });
         });
       });
-    });
+    };
+
+    if (isRestricted) {
+      db.get('SELECT requester FROM requests WHERE id = ?', [reqId], (err, reqRow) => {
+        if (err) return next(err);
+        if (!reqRow || reqRow.requester !== req.user.id) {
+          return res.status(403).json({ error: 'You do not have access to this request\'s audit trail.' });
+        }
+        runQuery();
+      });
+    } else {
+      runQuery();
+    }
     return;
   }
 
@@ -1312,8 +1432,7 @@ app.get('/api/audit', authenticateToken, (req, res, next) => {
   let dataQuery = "SELECT * FROM audit_logs ORDER BY id ASC LIMIT ? OFFSET ?";
   let params = [limit, offset];
 
-  if (req.user.role === 'DEV') {
-    // Basic DEV filtering - ideally done in SQL with JOIN but implemented similarly to old version
+  if (isRestricted) {
     db.all("SELECT id FROM requests WHERE requester = ?", [req.user.id], (err, userReqs) => {
       if (err) return next(err);
       const myIds = userReqs.map(r => r.id);
@@ -1394,8 +1513,10 @@ app.get('/api/queries', authenticateToken, (req, res, next) => {
 
   const dbRole = req.user.role;
   const allowedManagerRoles = ['FIN', 'OWN', 'ADM'];
+  const canViewAs = viewAs && allowedManagerRoles.includes(viewAs) &&
+    (dbRole === viewAs || dbRole === 'ADM' || dbRole === 'DEV');
 
-  if (viewAs && allowedManagerRoles.includes(viewAs)) {
+  if (canViewAs) {
     // Allow viewing as Finance or Owner inbox if:
     // 1. Their DB role matches viewAs
     // 2. Their DB role is ADM (admin can see everything)
@@ -1434,7 +1555,7 @@ app.post('/api/queries', authenticateToken, (req, res, next) => {
 });
 
 // Reply to Query (Finance/Owner/ADM or UI role-switch demo)
-app.post('/api/queries/:id/reply', authenticateToken, (req, res, next) => {
+app.post('/api/queries/:id/reply', authenticateToken, requireRole('FIN', 'OWN', 'ADM', 'DEV'), (req, res, next) => {
   const { response } = req.body;
   if (!response) return res.status(400).json({ error: 'response text is required' });
   db.run("UPDATE employee_queries SET response = ?, status = 'Answered', updated_at = ? WHERE id = ?",
@@ -1449,23 +1570,27 @@ app.post('/api/queries/:id/reply', authenticateToken, (req, res, next) => {
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
+// Extension is derived from the validated MIME type, never from the client-supplied
+// filename — otherwise a file declared as image/png but named "x.html" would be written
+// to disk as .html and served as text/html by express.static, enabling stored XSS.
+const MIME_TO_EXT = {
+  'image/jpeg': '.jpg', 'image/jpg': '.jpg', 'image/png': '.png', 'image/webp': '.webp',
+  'image/gif': '.gif', 'image/bmp': '.bmp', 'image/tiff': '.tiff',
+  'image/heic': '.heic', 'image/heif': '.heif', 'application/pdf': '.pdf'
+};
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadsDir),
   filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `invoice_${Date.now()}${ext}`);
+    const ext = MIME_TO_EXT[file.mimetype] || '.bin';
+    cb(null, `invoice_${Date.now()}_${crypto.randomBytes(4).toString('hex')}${ext}`);
   }
 });
 const upload = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
   fileFilter: (req, file, cb) => {
-    const allowed = [
-      'image/jpeg', 'image/jpg', 'image/png', 'image/webp',
-      'image/gif', 'image/bmp', 'image/tiff', 'image/heic', 'image/heif',
-      'application/pdf'
-    ];
-    if (allowed.includes(file.mimetype)) cb(null, true);
+    if (MIME_TO_EXT[file.mimetype]) cb(null, true);
     else cb(new Error(`File type "${file.mimetype}" is not supported. Allowed: JPG, PNG, WEBP, GIF, BMP, TIFF, HEIC, PDF`));
   }
 });
@@ -1835,7 +1960,7 @@ app.use((req, res) => {
   if (fs.existsSync(frontendIndexPath)) {
     res.sendFile(frontendIndexPath);
   } else {
-    res.sendFile(path.join(__dirname, 'index.html'));
+    res.status(503).json({ error: 'Frontend build not found. Run "npm run build".' });
   }
 });
 
