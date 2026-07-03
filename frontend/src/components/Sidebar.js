@@ -10,11 +10,16 @@ import {
   RateReview as RateReviewIcon,
   Engineering as EngineeringIcon,
   Palette as PaletteIcon,
+  ArrowBack as ArrowBackIcon,
+  Launch as LaunchIcon,
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 
 const drawerWidth = 240;
+
+// Central Hub URL — update this when deploying the Hub to a subdomain
+const HUB_URL = 'http://localhost:5173';
 
 const Sidebar = ({ mobileOpen, handleDrawerToggle }) => {
   const navigate = useNavigate();
@@ -72,7 +77,39 @@ const Sidebar = ({ mobileOpen, handleDrawerToggle }) => {
 
   const drawerContent = (
     <>
-      <Box sx={{ p: 2.5 }}>
+      {/* Back to Hub Button */}
+      <Box sx={{ px: 1.5, pt: 1.5 }}>
+        <Box
+          component="a"
+          href={HUB_URL}
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 0.75,
+            px: 1.5,
+            py: 0.75,
+            borderRadius: 2,
+            textDecoration: 'none',
+            color: '#94a3b8',
+            fontSize: 12,
+            fontWeight: 500,
+            background: 'rgba(99, 102, 241, 0.06)',
+            border: '1px solid rgba(99, 102, 241, 0.12)',
+            transition: 'all 0.2s ease',
+            '&:hover': {
+              background: 'rgba(99, 102, 241, 0.15)',
+              color: '#a5b4fc',
+              borderColor: 'rgba(99, 102, 241, 0.3)',
+            },
+          }}
+        >
+          <ArrowBackIcon sx={{ fontSize: 14 }} />
+          Back to Hub
+          <LaunchIcon sx={{ fontSize: 10, ml: 'auto', opacity: 0.5 }} />
+        </Box>
+      </Box>
+
+      <Box sx={{ p: 2.5, pt: 1.5 }}>
         <Typography variant="h6" color="primary" sx={{ fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 1 }}>
           <AccountBalanceIcon fontSize="small" /> Ai Finance
         </Typography>
