@@ -5,6 +5,7 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import { useApi } from '../hooks/useApi';
 import { setRequests } from '../store/paymentSlice';
 import SubmitRequest from './SubmitRequest';
+import SubmitSalaryRequest from './SubmitSalaryRequest';
 
 const VERIFIER_MAP = {
   rup:     { name: 'Rup',     color: '#3b82f6' },
@@ -58,6 +59,11 @@ const Dashboard = () => {
   // ── VENDOR: Show invoice form instead of dashboard ──
   if (user?.role === 'VND') {
     return <SubmitRequest />;
+  }
+
+  // ── EMPLOYEE (local login): Show salary request form instead of dashboard ──
+  if (user?.role === 'EMP' && localStorage.getItem('employeeToken')) {
+    return <SubmitSalaryRequest />;
   }
 
   if (loading) {

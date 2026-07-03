@@ -13,6 +13,7 @@ import WorksheetForm from './pages/WorksheetForm';
 import WorksheetAdmin from './pages/WorksheetAdmin';
 import { TechDashboard, ContentDashboard } from './pages/VerifierDashboard';
 import VendorLogin from './pages/VendorLogin';
+import EmployeeLogin from './pages/EmployeeLogin';
 import AuthSync from './components/AuthSync';
 import { useSelector, useDispatch } from 'react-redux';
 import { logout, setAuth } from './store/authSlice';
@@ -24,7 +25,7 @@ const ROLE_LABELS = {
   FIN: { label: '💼 Finance', color: '#22c55e' },
   OWN: { label: '👑 Owner', color: '#8b5cf6' },
   ADM: { label: '🛡️ Admin', color: '#ef4444' },
-  VND: { label: '🏪 Vendor', color: '#f97316' },
+  VND: { label: '🤝 Partner', color: '#f97316' },
 };
 
 // Inner layout for authenticated users (Clerk or Vendor)
@@ -43,12 +44,21 @@ function AuthenticatedLayout() {
 
   const roleInfo = ROLE_LABELS[user?.role] || { label: user?.role, color: '#6366f1' };
   const isVendor = user?.role === 'VND';
+  const isLocalEmployee = user?.role === 'EMP' && !!localStorage.getItem('employeeToken');
 
   const handleVendorLogout = () => {
     localStorage.removeItem('vendorToken');
     localStorage.removeItem('vendorUser');
     dispatch(logout());
     navigate('/vendor-login');
+    handleClose();
+  };
+
+  const handleEmployeeLogout = () => {
+    localStorage.removeItem('employeeToken');
+    localStorage.removeItem('employeeUser');
+    dispatch(logout());
+    navigate('/employee-login');
     handleClose();
   };
 
@@ -108,6 +118,10 @@ function AuthenticatedLayout() {
                     <MenuItem onClick={handleVendorLogout}>
                       <ExitToApp sx={{ mr: 1, fontSize: 18 }} /> Sign Out
                     </MenuItem>
+                  ) : isLocalEmployee ? (
+                    <MenuItem onClick={handleEmployeeLogout}>
+                      <ExitToApp sx={{ mr: 1, fontSize: 18 }} /> Sign Out
+                    </MenuItem>
                   ) : (
                     <MenuItem>
                       <SignOutButton />
@@ -136,23 +150,26 @@ function AuthenticatedLayout() {
   );
 }
 
-// Vendor auth check — restores vendor session from localStorage
-function VendorAuthWrapper({ children }) {
+// Local (non-Clerk) auth check — restores a vendor or employee session from localStorage
+function LocalAuthWrapper({ children }) {
   const dispatch = useDispatch();
   const { isAuthenticated } = useSelector(state => state.auth);
   const [checked, setChecked] = React.useState(false);
 
   React.useEffect(() => {
     if (!isAuthenticated) {
-      const vendorToken = localStorage.getItem('vendorToken');
-      const vendorUser = localStorage.getItem('vendorUser');
-      if (vendorToken && vendorUser) {
-        try {
-          const user = JSON.parse(vendorUser);
-          dispatch(setAuth({ user, token: vendorToken }));
-        } catch (e) {
-          localStorage.removeItem('vendorToken');
-          localStorage.removeItem('vendorUser');
+      for (const [tokenKey, userKey] of [['vendorToken', 'vendorUser'], ['employeeToken', 'employeeUser']]) {
+        const token = localStorage.getItem(tokenKey);
+        const storedUser = localStorage.getItem(userKey);
+        if (token && storedUser) {
+          try {
+            const user = JSON.parse(storedUser);
+            dispatch(setAuth({ user, token }));
+          } catch (e) {
+            localStorage.removeItem(tokenKey);
+            localStorage.removeItem(userKey);
+          }
+          break;
         }
       }
     }
@@ -181,30 +198,45 @@ function App() {
   const location = useLocation();
   const { isAuthenticated, user } = useSelector(state => state.auth);
   const isVendorRoute = location.pathname === '/vendor-login';
+  const isEmployeeRoute = location.pathname === '/employee-login';
   const isVendorAuthenticated = isAuthenticated && user?.role === 'VND';
+  const isEmployeeAuthenticated = isAuthenticated && user?.role === 'EMP' && !!localStorage.getItem('employeeToken');
 
-  // Vendor login page — always accessible, no Clerk
+  // Partner/vendor login page — always accessible, no Clerk
   if (isVendorRoute) {
     return <VendorLogin />;
   }
 
-  // If vendor is authenticated (from localStorage), show vendor layout directly
-  if (isVendorAuthenticated) {
+  // Employee login page — always accessible, no Clerk
+  if (isEmployeeRoute) {
+    return <EmployeeLogin />;
+  }
+
+  // If a partner or employee is authenticated (from localStorage), show the layout directly
+  if (isVendorAuthenticated || isEmployeeAuthenticated) {
     return <AuthenticatedLayout />;
   }
 
   return (
-    <VendorAuthWrapper>
+    <LocalAuthWrapper>
       <SignedOut>
         <Box sx={{ display: 'flex', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', bgcolor: '#0b0f19' }}>
           <Box sx={{ textAlign: 'center' }}>
             <SignIn />
             <Box sx={{ mt: 3 }}>
               <Typography variant="body2" color="text.secondary" mb={1}>
-                Are you a vendor?
+                Are you a partner?
               </Typography>
               <a href="/vendor-login" style={{ color: '#6366f1', textDecoration: 'none', fontWeight: 600 }}>
-                🏪 Go to Vendor Login
+                🤝 Go to Partner Login
+              </a>
+            </Box>
+            <Box sx={{ mt: 2 }}>
+              <Typography variant="body2" color="text.secondary" mb={1}>
+                Are you an employee?
+              </Typography>
+              <a href="/employee-login" style={{ color: '#6366f1', textDecoration: 'none', fontWeight: 600 }}>
+                👤 Go to Employee Login
               </a>
             </Box>
           </Box>
@@ -216,7 +248,7 @@ function App() {
           {user?.role === 'NONE' ? <NoAccessScreen /> : <AuthenticatedLayout />}
         </AuthSync>
       </SignedIn>
-    </VendorAuthWrapper>
+    </LocalAuthWrapper>
   );
 }
 

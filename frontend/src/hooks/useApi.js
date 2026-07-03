@@ -25,7 +25,7 @@ export function useApi() {
     }
 
     if (!token) {
-      token = localStorage.getItem('vendorToken');
+      token = localStorage.getItem('vendorToken') || localStorage.getItem('employeeToken');
     }
 
     const headers = { ...(options.headers || {}) };
