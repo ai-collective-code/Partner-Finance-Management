@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import {
   Box, Typography, Paper, Table, TableHead, TableRow, TableCell, TableBody,
-  Chip, Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField,
+  Chip, Button, Dialog, DialogTitle, DialogContent, DialogActions,
   Stepper, Step, StepLabel, Alert, CircularProgress, Divider, Avatar, Tooltip,
   IconButton
 } from '@mui/material';
 import {
-  CheckCircle, Cancel, Visibility, CurrencyRupee, Person, Schedule, VerifiedUser,
+  Visibility, CurrencyRupee, Person, Schedule, VerifiedUser,
   ZoomIn, OpenInNew, Close as CloseIcon
 } from '@mui/icons-material';
 import { useApi } from '../hooks/useApi';
@@ -15,11 +15,11 @@ import { useSelector } from 'react-redux';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || '';
 
-const STATUS_FLOW = ['PND', 'VRF', 'FIN', 'OWN', 'DSB'];
+const STATUS_FLOW = ['PND', 'OWN', 'FIN', 'DSB'];
 
 const statusLabel = (s) => ({
   PND: 'Pending Review',
-  VRF: '🔍 1st Line Verified',
+  VRF: '🔍 1st Line Verified (legacy)',
   FIN: '💼 Finance Review',
   OWN: '👑 Owner Auth',
   DSB: '✅ Disbursed',
@@ -50,9 +50,6 @@ const VerifierDashboard = ({ verifierId, title, subtitle, icon, accentColor }) =
   const [allRequests, setAllRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
-  const [comment, setComment] = useState('');
-  const [actionLoading, setActionLoading] = useState(false);
-  const [actionResult, setActionResult] = useState(null);
   const [imagePreview, setImagePreview] = useState(null); // lightbox URL
   
   // Comments history state
@@ -100,39 +97,6 @@ const VerifierDashboard = ({ verifierId, title, subtitle, icon, accentColor }) =
   const loggedInVerifierId = user?.name?.toLowerCase() || '';
   const myRequests = allRequests.filter(r => r.verifier?.toLowerCase() === loggedInVerifierId);
   const pendingCount = myRequests.filter(r => r.status === 'PND').length;
-
-  const doAction = async (nextState) => {
-    if (!comment.trim()) { setActionResult({ type: 'error', msg: 'Please add a review comment.' }); return; }
-    if (selected?.verifier?.toLowerCase() !== loggedInVerifierId) {
-      setActionResult({ type: 'error', msg: 'Security error: You are not the assigned verifier.' });
-      return;
-    }
-    setActionLoading(true);
-    setActionResult(null);
-    try {
-      const res = await apiFetch('/api/action', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: selected.id, nextState, comment })
-      });
-      if (res.ok) {
-        setActionResult({ type: 'success', msg: nextState === 'VRF' ? 'Verified ✅' : 'Rejected ❌' });
-        setComment('');
-        // Re-fetch comments to show the new comment immediately
-        const cRes = await apiFetch(`/api/audit?reqId=${selected.id}`);
-        if (cRes.ok) {
-          const cData = await cRes.json();
-          setComments(cData.data || []);
-        }
-        fetchRequests();
-        setTimeout(() => { setSelected(null); setActionResult(null); }, 1500);
-      } else {
-        const err = await res.json();
-        setActionResult({ type: 'error', msg: err.error || 'Action failed' });
-      }
-    } catch { setActionResult({ type: 'error', msg: 'Network error' }); }
-    finally { setActionLoading(false); }
-  };
 
   return (
     <Box>
@@ -217,13 +181,13 @@ const VerifierDashboard = ({ verifierId, title, subtitle, icon, accentColor }) =
                   </TableCell>
                   <TableCell>
                     <Stepper activeStep={stepIndex(req.status)} sx={{ '& .MuiStepLabel-label': { fontSize: 9 }, minWidth: 240 }}>
-                      {['Submit', '1st Verify', 'Finance', 'Owner', 'Paid'].map(l => (
+                      {['Submit', 'Owner', 'Finance', 'Paid'].map(l => (
                         <Step key={l}><StepLabel>{l}</StepLabel></Step>
                       ))}
                     </Stepper>
                   </TableCell>
                   <TableCell align="right">
-                    <Button size="small" startIcon={<Visibility />} onClick={() => { setSelected(req); setComment(''); setActionResult(null); }}>
+                    <Button size="small" startIcon={<Visibility />} onClick={() => setSelected(req)}>
                       Review
                     </Button>
                   </TableCell>
@@ -247,7 +211,7 @@ const VerifierDashboard = ({ verifierId, title, subtitle, icon, accentColor }) =
             </DialogTitle>
             <DialogContent>
               <Stepper activeStep={stepIndex(selected.status)} sx={{ mb: 3 }}>
-                {['Submitted', '1st Verified', 'Finance', 'Owner Auth', 'Disbursed'].map(l => (
+                {['Submitted', 'Owner Auth', 'Finance', 'Disbursed'].map(l => (
                   <Step key={l}><StepLabel sx={{ '& .MuiStepLabel-label': { fontSize: 11 } }}>{l}</StepLabel></Step>
                 ))}
               </Stepper>
@@ -419,17 +383,15 @@ const VerifierDashboard = ({ verifierId, title, subtitle, icon, accentColor }) =
               )}
 
               <Divider sx={{ mb: 2, borderColor: 'rgba(255,255,255,0.08)' }} />
-              <TextField
-                label="Review Comment *" multiline rows={3} fullWidth
-                value={comment} onChange={(e) => setComment(e.target.value)}
-                placeholder="Add your review notes..."
-                sx={{ mb: 2 }}
-              />
-              {actionResult && <Alert severity={actionResult.type} sx={{ mb: 1 }}>{actionResult.msg}</Alert>}
 
               {selected.status === 'PND' && (
+                <Alert severity="warning" sx={{ fontSize: 12 }} icon={<VerifiedUser />}>
+                  <strong>1st-line verification has been removed from the workflow.</strong> This request now goes directly to Owner Auth (Debojit) — there's nothing to action here anymore.
+                </Alert>
+              )}
+              {selected.status === 'VRF' && (
                 <Alert severity="info" sx={{ fontSize: 12 }} icon={<VerifiedUser />}>
-                  <strong>First-Line Verification:</strong> Review this vendor request and either verify it (send to Finance) or reject it.
+                  This is a legacy request submitted before the 1st-line verify stage was removed. Owner Auth (Debojit) can move it forward from the Finance Review page.
                 </Alert>
               )}
               {selected.status === 'DSB' && <Alert severity="success">✅ This request has been fully disbursed.</Alert>}
@@ -437,14 +399,6 @@ const VerifierDashboard = ({ verifierId, title, subtitle, icon, accentColor }) =
             </DialogContent>
             <DialogActions sx={{ p: 2.5, gap: 1 }}>
               <Button onClick={() => setSelected(null)} color="inherit">Close</Button>
-              {selected.status === 'PND' && (
-                <>
-                  <Button startIcon={<Cancel />} color="error" variant="outlined" onClick={() => doAction('REJ')} disabled={actionLoading}>Reject</Button>
-                  <Button startIcon={<CheckCircle />} variant="contained" color="info" onClick={() => doAction('VRF')} disabled={actionLoading}>
-                    {actionLoading ? <CircularProgress size={18} color="inherit" /> : '✅ Verify'}
-                  </Button>
-                </>
-              )}
             </DialogActions>
           </>
         )}

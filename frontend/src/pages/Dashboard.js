@@ -77,7 +77,7 @@ const Dashboard = () => {
   return (
     <Box>
       <Typography variant="h4" mb={1} fontWeight={700}>My Disbursement Requests</Typography>
-      <Typography variant="body2" color="text.secondary" mb={3}>Track your vendor requests through the 5-stage approval pipeline</Typography>
+      <Typography variant="body2" color="text.secondary" mb={3}>Track your vendor requests through the 4-stage approval pipeline</Typography>
 
       {/* Workflow pipeline */}
       <Paper sx={{ p: 2, mb: 3, borderRadius: 3, background: 'rgba(99,102,241,0.05)', border: '1px solid rgba(99,102,241,0.15)', display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
@@ -85,11 +85,9 @@ const Dashboard = () => {
         {[
           { label: '🏪 Vendor', color: '#6366f1' },
           { arrow: true },
-          { label: '👁️ 1st Verify', color: '#3b82f6', sub: 'Rup/Debojit/Yash/Soumana' },
+          { label: '👑 Owner', color: '#8b5cf6', sub: 'Debojit' },
           { arrow: true },
           { label: '💼 Finance', color: '#6366f1', sub: 'Yash' },
-          { arrow: true },
-          { label: '👑 Owner', color: '#8b5cf6', sub: 'Debojit' },
           { arrow: true },
           { label: '✅ Payment', color: '#22c55e' },
         ].map((step, i) =>

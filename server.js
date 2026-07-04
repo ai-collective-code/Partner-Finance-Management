@@ -388,29 +388,33 @@ async function initPostgres(pgConfig) {
   await pool.query('CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_logs(actor)');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id)');
 
+  // Remove the 1st-line verify stage (PND -> VRF) from the pipeline going forward.
+  // VRF -> OWN / VRF -> REJ are kept so any request already sitting at VRF from
+  // before this change can still be moved forward instead of getting stuck.
+  await pool.query(`DELETE FROM state_transitions WHERE (from_state, to_state, required_role) IN (
+    ('PND','VRF','VRF'), ('PND','VRF','FIN'), ('PND','VRF','OWN'), ('PND','VRF','ADM'),
+    ('PND','REJ','VRF'), ('REJ','VRF','OWN')
+  )`);
+
   // Seed transitions
   const transitions = [
-    ['PND', 'VRF', 'VRF'],
-    ['PND', 'VRF', 'FIN'], // Master Key (Yash)
-    ['PND', 'VRF', 'OWN'], // Master Key (Debojit)
-    ['PND', 'REJ', 'VRF'],
+    ['PND', 'OWN', 'OWN'], // Owner validates directly on submission (1st-line verify removed)
     ['PND', 'REJ', 'FIN'],
     ['PND', 'REJ', 'OWN'],
-    
-    ['VRF', 'OWN', 'OWN'], // Owner validates after VRF
+
+    ['VRF', 'OWN', 'OWN'], // Legacy bridge for any pre-existing VRF-status request
     ['VRF', 'REJ', 'OWN'],
-    
+
     ['OWN', 'FIN', 'FIN'], // Finance verifies after Owner
     ['OWN', 'REJ', 'FIN'],
-    
+
     ['FIN', 'DSB', 'FIN'], // Finance disburses
     ['FIN', 'DSB', 'SYSTEM'],
-    
+
     ['REJ', 'PND', 'FIN'],
-    ['REJ', 'VRF', 'OWN'],
-    
+
     // Admin overrides
-    ['PND', 'VRF', 'ADM'],
+    ['PND', 'OWN', 'ADM'],
     ['VRF', 'OWN', 'ADM'],
     ['OWN', 'FIN', 'ADM'],
     ['FIN', 'DSB', 'ADM'],
@@ -585,28 +589,32 @@ function initSQLite() {
       sqliteDb.run('CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_logs(actor)');
       sqliteDb.run('CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id)');
 
+      // Remove the 1st-line verify stage (PND -> VRF) from the pipeline going forward.
+      // VRF -> OWN / VRF -> REJ are kept so any request already sitting at VRF from
+      // before this change can still be moved forward instead of getting stuck.
+      sqliteDb.run(`DELETE FROM state_transitions WHERE (from_state || '|' || to_state || '|' || required_role) IN (
+        'PND|VRF|VRF', 'PND|VRF|FIN', 'PND|VRF|OWN', 'PND|VRF|ADM',
+        'PND|REJ|VRF', 'REJ|VRF|OWN'
+      )`);
+
       const transitions = [
-        ['PND', 'VRF', 'VRF'],
-        ['PND', 'VRF', 'FIN'], // Master Key (Yash)
-        ['PND', 'VRF', 'OWN'], // Master Key (Debojit)
-        ['PND', 'REJ', 'VRF'],
+        ['PND', 'OWN', 'OWN'], // Owner validates directly on submission (1st-line verify removed)
         ['PND', 'REJ', 'FIN'],
         ['PND', 'REJ', 'OWN'],
-        
-        ['VRF', 'OWN', 'OWN'], // Owner validates after VRF
+
+        ['VRF', 'OWN', 'OWN'], // Legacy bridge for any pre-existing VRF-status request
         ['VRF', 'REJ', 'OWN'],
-        
+
         ['OWN', 'FIN', 'FIN'], // Finance verifies after Owner
         ['OWN', 'REJ', 'FIN'],
-        
+
         ['FIN', 'DSB', 'FIN'], // Finance disburses
         ['FIN', 'DSB', 'SYSTEM'],
-        
+
         ['REJ', 'PND', 'FIN'],
-        ['REJ', 'VRF', 'OWN'],
-        
+
         // Admin overrides
-        ['PND', 'VRF', 'ADM'],
+        ['PND', 'OWN', 'ADM'],
         ['VRF', 'OWN', 'ADM'],
         ['OWN', 'FIN', 'ADM'],
         ['FIN', 'DSB', 'ADM'],
@@ -661,12 +669,12 @@ function signAuditEntry(reqId, actor, prev, next, comment, ts) {
 
 // ══════════ EMAIL → ROLE MAPPING (Fixed Roles) ══════════
 const EMAIL_ROLE_MAP = {
-  'rayabakash@gmail.com':      { role: 'DEV', name: 'Abakash' },
-  'abakashray57@gmail.com':    { role: 'EMP', name: 'Abakash' },
+  'rayabakash@gmail.com':      { role: 'OWN', name: 'Abakash' },
+  'abakashray57@gmail.com':    { role: 'OWN', name: 'Abakash' },
   'bitmyth2005@gmail.com':   { role: 'VRF', name: 'Rup' },
   'abakashray846@gmail.com':   { role: 'VRF', name: 'Soumana' },
-  'vickey.yash@gmail.com': { role: 'FIN', name: 'Yash' },
-  'onedebojit1@gmail.com': { role: 'OWN', name: 'Debojit' },
+  'abakashray003@gmail.com': { role: 'FIN', name: 'Abakash' },
+  'rayabakash0@gmail.com': { role: 'OWN', name: 'Abakash' },
   'cse2022017@rcciit.org.in':  { role: 'ADM', name: 'Admin' },
 };
 
@@ -1323,26 +1331,11 @@ app.post('/api/action', authenticateToken, actionLimiter, validate(actionSchema)
     if (err) return next(err);
     if (!reqRow) return res.status(404).json({ error: 'Request not found' });
 
-    // Enforce Verifier Isolation:
-    // If the request is pending first-line review (PND) and moving to verified (VRF),
-    // ensure the actor is the assigned verifier.
-    // Matching rules (any one is sufficient):
-    //   1. req.user.name matches verifier field (case-insensitive)
-    //   2. The verifier field is 'debojit' and the user's role is 'OWN' (Debojit is always the Owner)
-    //   3. ADM can do anything
-    if (reqRow.status === 'PND' && nextState === 'VRF') {
-      if (reqRow.verifier) {
-        const verifierLower = reqRow.verifier.toLowerCase();
-        const userNameLower = (req.user.name || '').toLowerCase();
-        const isAssignedDebojit = verifierLower === 'debojit' && req.user.role === 'OWN';
-        const nameMatches = verifierLower === userNameLower;
-        const isAdmin = req.user.role === 'ADM';
-        const isMasterKey = req.user.role === 'OWN' || req.user.role === 'FIN';
-        if (!nameMatches && !isAssignedDebojit && !isAdmin && !isMasterKey) {
-          return res.status(403).json({ error: `Verification blocked: This request is specifically assigned to ${reqRow.verifier}. Only they can verify it. (Master Key overridden by Owner/Finance)` });
-        }
-      }
-    }
+    // Note: the 1st-line verify stage (PND -> VRF) was removed, along with the
+    // per-reviewer "verifier isolation" check that used to route a request to
+    // whichever of Rup/Soumana it was assigned to. Requests now go straight from
+    // PND to OWN, and OWN/FIN are each held by exactly one person, so there's no
+    // remaining ambiguity for the state_transitions role check below to resolve.
 
     // Maker-checker: prevent self-approval (disabled for demo so you can test the entire workflow with a single account!)
     /*

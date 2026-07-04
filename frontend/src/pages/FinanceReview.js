@@ -15,11 +15,11 @@ import { useSelector } from 'react-redux';
 const API_BASE_URL = process.env.REACT_APP_API_URL || '';
 
 // New workflow: PND → VRF → OWN → FIN → DSB
-const STATUS_FLOW = ['PND', 'VRF', 'OWN', 'FIN', 'DSB'];
+const STATUS_FLOW = ['PND', 'OWN', 'FIN', 'DSB'];
 
 const statusLabel = (s) => ({
   PND: 'Pending Review',
-  VRF: '🔍 1st Line Verified',
+  VRF: '🔍 1st Line Verified (legacy)',
   FIN: '💼 Finance Review',
   OWN: '👑 Owner Auth',
   DSB: '✅ Disbursed',
@@ -85,7 +85,6 @@ const FinanceReview = () => {
 
   const isOwner   = user?.role === 'OWN' || user?.role === 'ADM';
   const isFin     = user?.role === 'FIN' || user?.role === 'ADM';
-  const isVrf     = user?.role === 'VRF' || user?.role === 'FIN' || user?.role === 'OWN' || user?.role === 'ADM';
   const isStrictFin = user?.role === 'FIN';
 
   const fetchRequests = async () => {
@@ -338,8 +337,6 @@ const FinanceReview = () => {
           {[
             { label: '🤝 Partner Submits', state: 'PND', color: '#f59e0b' },
             { arrow: true },
-            { label: '👁️ 1st Line Verify', state: 'VRF', color: '#3b82f6', sub: 'Rup / Debojit / Yash / Soumana' },
-            { arrow: true },
             { label: '👑 Owner Auth', state: 'OWN', color: '#8b5cf6', sub: 'Debojit (Creative Head & Owner)' },
             { arrow: true },
             { label: '💼 Finance Review', state: 'FIN', color: '#6366f1', sub: 'Yash (Finance Head)' },
@@ -366,7 +363,7 @@ const FinanceReview = () => {
         {[
           { label: 'Total', value: requests.length, color: '#6366f1' },
           { label: 'Pending', value: requests.filter(r => r.status === 'PND').length, color: '#f59e0b' },
-          { label: '1st Verified', value: requests.filter(r => r.status === 'VRF').length, color: '#3b82f6' },
+          { label: '1st Verified (legacy)', value: requests.filter(r => r.status === 'VRF').length, color: '#3b82f6' },
           { label: 'Owner Auth', value: requests.filter(r => r.status === 'OWN').length, color: '#8b5cf6' },
           { label: 'Finance Review', value: requests.filter(r => r.status === 'FIN').length, color: '#6366f1' },
           { label: 'Disbursed', value: requests.filter(r => r.status === 'DSB').length, color: '#22c55e' },
@@ -448,7 +445,7 @@ const FinanceReview = () => {
                     </TableCell>
                     <TableCell>
                       <Stepper activeStep={stepIndex(req.status)} sx={{ '& .MuiStepLabel-label': { fontSize: 9 }, minWidth: 240 }}>
-                        {['Submit', '1st Verify', 'Owner', 'Finance', 'Paid'].map(l => (
+                        {['Submit', 'Owner', 'Finance', 'Paid'].map(l => (
                           <Step key={l}><StepLabel>{l}</StepLabel></Step>
                         ))}
                       </Stepper>
@@ -487,7 +484,7 @@ const FinanceReview = () => {
               <DialogContent>
                  {/* Workflow Stepper */}
                 <Stepper activeStep={stepIndex(selected.status)} sx={{ mb: 3 }}>
-                  {['Submitted', '1st Verified', 'Owner Auth', 'Finance', 'Disbursed'].map(l => (
+                  {['Submitted', 'Owner Auth', 'Finance', 'Disbursed'].map(l => (
                     <Step key={l}><StepLabel sx={{ '& .MuiStepLabel-label': { fontSize: 11 } }}>{l}</StepLabel></Step>
                   ))}
                 </Stepper>
@@ -498,30 +495,59 @@ const FinanceReview = () => {
                   <Paper sx={{ p: 3, mb: 3, borderRadius: 3, border: '1px solid rgba(99,102,241,0.2)', background: 'rgba(99,102,241,0.03)' }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
                       <Receipt sx={{ color: '#6366f1' }} />
-                      <Typography variant="h6" fontWeight={700} color="primary.light">Invoice Details</Typography>
+                      <Typography variant="h6" fontWeight={700} color="primary.light">{meta.type === 'salary' ? 'Salary Request Details' : 'Invoice Details'}</Typography>
                     </Box>
-                    
-                    {/* Partner Info */}
-                    <Typography variant="overline" color="text.disabled" sx={{ letterSpacing: 1 }}>Partner Information</Typography>
-                    <Grid container spacing={2} sx={{ mb: 2 }}>
-                      <Grid item xs={6}><Typography variant="caption" color="text.secondary">Name</Typography><Typography variant="body2" fontWeight={600}>{meta.vendorName || meta.partnerName || '—'}</Typography></Grid>
-                      <Grid item xs={6}><Typography variant="caption" color="text.secondary">Company</Typography><Typography variant="body2" fontWeight={600}>{meta.companyName || '—'}</Typography></Grid>
-                      <Grid item xs={6}><Typography variant="caption" color="text.secondary">Phone</Typography><Typography variant="body2">{meta.phone || '—'}</Typography></Grid>
-                      <Grid item xs={3}><Typography variant="caption" color="text.secondary">City</Typography><Typography variant="body2">{meta.city || '—'}</Typography></Grid>
-                      <Grid item xs={3}><Typography variant="caption" color="text.secondary">State</Typography><Typography variant="body2">{meta.state || '—'}</Typography></Grid>
-                    </Grid>
-                    <Divider sx={{ my: 1.5, borderColor: 'rgba(255,255,255,0.06)' }} />
 
-                    {/* Project Info */}
-                    <Typography variant="overline" color="text.disabled" sx={{ letterSpacing: 1 }}>Project Details</Typography>
-                    <Grid container spacing={2} sx={{ mb: 2 }}>
-                      <Grid item xs={6}><Typography variant="caption" color="text.secondary">Project</Typography><Typography variant="body2" fontWeight={600}>{meta.projectName || '—'}</Typography></Grid>
-                      <Grid item xs={6}><Typography variant="caption" color="text.secondary">Job Description</Typography><Typography variant="body2">{meta.jobDescription || meta.department || '—'}</Typography></Grid>
-                      <Grid item xs={6}><Typography variant="caption" color="text.secondary">Project Head</Typography><Typography variant="body2">{meta.projectHead || '—'}</Typography></Grid>
-                      <Grid item xs={3}><Typography variant="caption" color="text.secondary">Start</Typography><Typography variant="body2">{meta.startDate || '—'}</Typography></Grid>
-                      <Grid item xs={3}><Typography variant="caption" color="text.secondary">End</Typography><Typography variant="body2">{meta.endDate || '—'}</Typography></Grid>
-                    </Grid>
-                    <Divider sx={{ my: 1.5, borderColor: 'rgba(255,255,255,0.06)' }} />
+                    {meta.type === 'salary' ? (
+                      <>
+                        {/* Employee Info */}
+                        <Typography variant="overline" color="text.disabled" sx={{ letterSpacing: 1 }}>Employee Information</Typography>
+                        <Grid container spacing={2} sx={{ mb: 2 }}>
+                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Name</Typography><Typography variant="body2" fontWeight={600}>{meta.employeeName || '—'}</Typography></Grid>
+                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Employee ID</Typography><Typography variant="body2" fontWeight={600}>{meta.employeeCode || '—'}</Typography></Grid>
+                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Phone</Typography><Typography variant="body2">{meta.phone || '—'}</Typography></Grid>
+                          <Grid item xs={3}><Typography variant="caption" color="text.secondary">City</Typography><Typography variant="body2">{meta.city || '—'}</Typography></Grid>
+                          <Grid item xs={3}><Typography variant="caption" color="text.secondary">State</Typography><Typography variant="body2">{meta.state || '—'}</Typography></Grid>
+                        </Grid>
+                        <Divider sx={{ my: 1.5, borderColor: 'rgba(255,255,255,0.06)' }} />
+
+                        {/* Salary Info */}
+                        <Typography variant="overline" color="text.disabled" sx={{ letterSpacing: 1 }}>Salary Details</Typography>
+                        <Grid container spacing={2} sx={{ mb: 2 }}>
+                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Month</Typography><Typography variant="body2" fontWeight={600}>{meta.month || '—'}</Typography></Grid>
+                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Department</Typography><Typography variant="body2">{meta.department || '—'}</Typography></Grid>
+                          <Grid item xs={4}><Typography variant="caption" color="text.secondary">Base Salary</Typography><Typography variant="body2">₹{(meta.baseSalary || 0).toLocaleString()}</Typography></Grid>
+                          <Grid item xs={4}><Typography variant="caption" color="text.secondary">Deductions</Typography><Typography variant="body2">₹{(meta.deductions || 0).toLocaleString()}</Typography></Grid>
+                          <Grid item xs={4}><Typography variant="caption" color="text.secondary">Net Payable</Typography><Typography variant="body2" fontWeight={600}>₹{(meta.netAmount || 0).toLocaleString()}</Typography></Grid>
+                          <Grid item xs={12}><Typography variant="caption" color="text.secondary">Project Head / Approver</Typography><Typography variant="body2">{meta.projectHead || '—'}</Typography></Grid>
+                        </Grid>
+                        <Divider sx={{ my: 1.5, borderColor: 'rgba(255,255,255,0.06)' }} />
+                      </>
+                    ) : (
+                      <>
+                        {/* Partner Info */}
+                        <Typography variant="overline" color="text.disabled" sx={{ letterSpacing: 1 }}>Partner Information</Typography>
+                        <Grid container spacing={2} sx={{ mb: 2 }}>
+                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Name</Typography><Typography variant="body2" fontWeight={600}>{meta.vendorName || meta.partnerName || '—'}</Typography></Grid>
+                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Company</Typography><Typography variant="body2" fontWeight={600}>{meta.companyName || '—'}</Typography></Grid>
+                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Phone</Typography><Typography variant="body2">{meta.phone || '—'}</Typography></Grid>
+                          <Grid item xs={3}><Typography variant="caption" color="text.secondary">City</Typography><Typography variant="body2">{meta.city || '—'}</Typography></Grid>
+                          <Grid item xs={3}><Typography variant="caption" color="text.secondary">State</Typography><Typography variant="body2">{meta.state || '—'}</Typography></Grid>
+                        </Grid>
+                        <Divider sx={{ my: 1.5, borderColor: 'rgba(255,255,255,0.06)' }} />
+
+                        {/* Project Info */}
+                        <Typography variant="overline" color="text.disabled" sx={{ letterSpacing: 1 }}>Project Details</Typography>
+                        <Grid container spacing={2} sx={{ mb: 2 }}>
+                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Project</Typography><Typography variant="body2" fontWeight={600}>{meta.projectName || '—'}</Typography></Grid>
+                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Job Description</Typography><Typography variant="body2">{meta.jobDescription || meta.department || '—'}</Typography></Grid>
+                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Project Head</Typography><Typography variant="body2">{meta.projectHead || '—'}</Typography></Grid>
+                          <Grid item xs={3}><Typography variant="caption" color="text.secondary">Start</Typography><Typography variant="body2">{meta.startDate || '—'}</Typography></Grid>
+                          <Grid item xs={3}><Typography variant="caption" color="text.secondary">End</Typography><Typography variant="body2">{meta.endDate || '—'}</Typography></Grid>
+                        </Grid>
+                        <Divider sx={{ my: 1.5, borderColor: 'rgba(255,255,255,0.06)' }} />
+                      </>
+                    )}
 
                     {/* Bank & Cheque Details */}
                     {(meta.bankName || meta.chequeFileHash) && (
@@ -569,9 +595,15 @@ const FinanceReview = () => {
                     <Typography variant="overline" color="text.disabled" sx={{ letterSpacing: 1 }}>Financial Summary</Typography>
                     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.8, mt: 1 }}>
                       <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <Typography variant="body2" color="text.secondary">Base Amount</Typography>
-                        <Typography variant="body2" fontWeight={600}>₹{(meta.baseAmount || 0).toLocaleString()}</Typography>
+                        <Typography variant="body2" color="text.secondary">{meta.type === 'salary' ? 'Base Salary' : 'Base Amount'}</Typography>
+                        <Typography variant="body2" fontWeight={600}>₹{(meta.type === 'salary' ? (meta.baseSalary || 0) : (meta.baseAmount || 0)).toLocaleString()}</Typography>
                       </Box>
+                      {meta.type === 'salary' && meta.deductions > 0 && (
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <Typography variant="body2" color="text.secondary">Deductions</Typography>
+                          <Typography variant="body2">-₹{meta.deductions.toLocaleString()}</Typography>
+                        </Box>
+                      )}
                       {meta.advanceAmount > 0 && (
                         <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                           <Typography variant="body2" color="text.secondary">Advance Amount</Typography>
@@ -621,7 +653,7 @@ const FinanceReview = () => {
                 {/* Verifier Info */}
                 {vInfo && (
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                    <Typography variant="caption" color="text.secondary">1st-Line Verifier</Typography>
+                    <Typography variant="caption" color="text.secondary">Assigned To</Typography>
                     <Chip
                       icon={<VerifiedUser sx={{ fontSize: 14 }} />}
                       label={`${vInfo.name} — ${vInfo.title}`}
@@ -631,13 +663,13 @@ const FinanceReview = () => {
                   </Box>
                 )}
 
-                {/* ── ORIGINAL PARTNER INVOICE ── */}
+                {/* ── ATTACHED DOCUMENT ── */}
                 {selected.file_hash && (() => {
                   const isPdf = selected.file_hash.toLowerCase().endsWith('.pdf');
                   return (
                     <Paper sx={{ p: 2, mb: 3, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(0,0,0,0.3)' }}>
                       <Typography variant="overline" color="text.disabled" sx={{ letterSpacing: 1, mb: 1, display: 'block' }}>
-                        📄 Original Partner Invoice
+                        📄 {meta?.type === 'salary' ? 'Attached Payslip / Proof Document' : 'Original Partner Invoice'}
                       </Typography>
                       {isPdf ? (
                         <Box sx={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden' }}>
@@ -666,7 +698,7 @@ const FinanceReview = () => {
                           <Box
                             component="img"
                             src={`${API_BASE_URL}/uploads/${selected.file_hash}`}
-                            alt="Original Partner Invoice"
+                            alt="Attached document"
                             sx={{ width: '100%', maxHeight: 400, objectFit: 'contain', borderRadius: 2, border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer' }}
                             onClick={() => setFullImage(`${API_BASE_URL}/uploads/${selected.file_hash}`)}
                           />
@@ -756,14 +788,14 @@ const FinanceReview = () => {
                 )}
 
                 {/* Contextual guidance per role & status */}
-                {selected.status === 'PND' && isVrf && (
-                  <Alert severity="info" sx={{ fontSize: 12 }} icon={<VerifiedUser />}>
-                    <strong>First-Line Verification:</strong> As {vInfo ? vInfo.name : 'Verifier'}, review this request and either verify it (send to Owner) or reject it.
+                {selected.status === 'PND' && isOwner && (
+                  <Alert severity="info" sx={{ fontSize: 12 }} icon={<Gavel />}>
+                    <strong>Owner Authorization (Debojit):</strong> Review this newly submitted request and either authorize it (send to Finance) or reject it.
                   </Alert>
                 )}
                 {selected.status === 'VRF' && isOwner && (
                   <Alert severity="info" sx={{ fontSize: 12 }} icon={<Gavel />}>
-                    <strong>Owner Authorization (Debojit):</strong> First-line verification is complete. Authorize payment or reject.
+                    <strong>Owner Authorization (Debojit):</strong> This is a legacy request from before the 1st-line verify stage was removed. Authorize payment or reject.
                   </Alert>
                 )}
                 {selected.status === 'OWN' && isFin && (
@@ -786,22 +818,22 @@ const FinanceReview = () => {
               <DialogActions sx={{ p: 2.5, gap: 1 }}>
                 <Button onClick={() => setSelected(null)} color="inherit">Close</Button>
 
-                {/* STAGE 1: PND → VRF */}
-                {selected.status === 'PND' && isVrf && (
-                  <>
-                    <Button startIcon={<Cancel />} color="error" variant="outlined" onClick={() => doAction('REJ')} disabled={actionLoading}>Reject</Button>
-                    <Button startIcon={<CheckCircle />} variant="contained" color="info" onClick={() => doAction('VRF')} disabled={actionLoading}>
-                      {actionLoading ? <CircularProgress size={18} color="inherit" /> : '✅ Verify (1st Line)'}
-                    </Button>
-                  </>
-                )}
-
-                {/* STAGE 2: VRF → OWN */}
-                {selected.status === 'VRF' && isOwner && (
+                {/* STAGE 1: PND → OWN (1st-line verify stage removed — Owner authorizes directly) */}
+                {selected.status === 'PND' && isOwner && (
                   <>
                     <Button startIcon={<Cancel />} color="error" variant="outlined" onClick={() => doAction('REJ')} disabled={actionLoading}>Reject</Button>
                     <Button startIcon={<Gavel />} variant="contained" color="secondary" onClick={() => doAction('OWN')} disabled={actionLoading}>
                       {actionLoading ? <CircularProgress size={18} color="inherit" /> : '👑 Authorize Payment'}
+                    </Button>
+                  </>
+                )}
+
+                {/* STAGE 1 (legacy): VRF → OWN, for any request submitted before this stage was removed */}
+                {selected.status === 'VRF' && isOwner && (
+                  <>
+                    <Button startIcon={<Cancel />} color="error" variant="outlined" onClick={() => doAction('REJ')} disabled={actionLoading}>Reject</Button>
+                    <Button startIcon={<Gavel />} variant="contained" color="secondary" onClick={() => doAction('OWN')} disabled={actionLoading}>
+                      {actionLoading ? <CircularProgress size={18} color="inherit" /> : '👑 Authorize Payment (legacy)'}
                     </Button>
                   </>
                 )}
