@@ -274,14 +274,7 @@ const SubmitRequest = () => {
   const [selectedProject, setSelectedProject] = useState(null); // Full project object
   const [partnerNameMismatch, setPartnerNameMismatch] = useState(false);
   
-  // OTP Verification State
-  const [otpRequired, setOtpRequired] = useState(false);
-  const [otpSent, setOtpSent] = useState(false);
-  const [otpVerified, setOtpVerified] = useState(false);
-  const [otpCode, setOtpCode] = useState('');
-  const [otpLoading, setOtpLoading] = useState(false);
-  const [otpError, setOtpError] = useState('');
-  const [otpDialogOpen, setOtpDialogOpen] = useState(false);
+  // OTP Verification Disabled
 
   // An invoice document is only mandatory on this partner's very first submission —
   // after that it's optional (they can still generate/attach one via the button below).
@@ -324,11 +317,6 @@ const SubmitRequest = () => {
   const handleProjectSelect = (event, newInputValue) => {
     setProjectName(newInputValue || '');
     setPartnerNameMismatch(false);
-    setOtpRequired(false);
-    setOtpSent(false);
-    setOtpVerified(false);
-    setOtpCode('');
-    setOtpError('');
     setSelectedProject(null);
 
     if (!newInputValue) {
@@ -353,9 +341,8 @@ const SubmitRequest = () => {
         }
       }
 
-      // If project has a partner phone, OTP is required
+      // If project has a partner phone, auto-fill phone
       if (matchedProject.partner_phone) {
-        setOtpRequired(false);
         setPhone(matchedProject.partner_phone);
       }
     }
@@ -369,60 +356,7 @@ const SubmitRequest = () => {
     }
   }, [vendorName, selectedProject]);
 
-  const handleSendOtp = async () => {
-    if (!selectedProject?.partner_phone || !selectedProject?.code) return;
-    setOtpLoading(true);
-    setOtpError('');
-    setOtpCode('');
-    try {
-      const res = await apiFetch('/api/projects/send-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: selectedProject.partner_phone, projectCode: selectedProject.code })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setOtpSent(true);
-        setOtpDialogOpen(true);
-        if (data.debug_otp) {
-          // Simulate phone SMS for testing
-          window.alert(`📱 SIMULATED SMS to ${selectedProject.partner_phone}:\n\nYour Ai Collective Finance OTP is: ${data.debug_otp}`);
-        }
-      } else {
-        setOtpError(data.error || 'Failed to send OTP');
-      }
-    } catch (e) {
-      console.error(e);
-      setOtpError('Network error sending OTP');
-    } finally {
-      setOtpLoading(false);
-    }
-  };
 
-  const handleVerifyOtp = async () => {
-    if (!otpCode || !selectedProject?.partner_phone || !selectedProject?.code) return;
-    setOtpLoading(true);
-    setOtpError('');
-    try {
-      const res = await apiFetch('/api/projects/verify-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: selectedProject.partner_phone, otp: otpCode, projectCode: selectedProject.code })
-      });
-      const data = await res.json();
-      if (res.ok && data.verified) {
-        setOtpVerified(true);
-        setOtpDialogOpen(false);
-        setOtpError('');
-      } else {
-        setOtpError(data.error || 'OTP verification failed');
-      }
-    } catch {
-      setOtpError('Network error verifying OTP');
-    } finally {
-      setOtpLoading(false);
-    }
-  };
 
   // Dynamic GST Calculation Logic
   // CGST + SGST when vendor is in the same state as company (Uttar Pradesh)
@@ -632,11 +566,7 @@ const SubmitRequest = () => {
       return;
     }
 
-    // Anti-fraud: Block if OTP required but not verified
-    if (otpRequired && !otpVerified) {
-      setError('Phone OTP verification is required for this project. Please verify your phone number before submitting.');
-      return;
-    }
+
     
     setLoading(true);
     setError(null);
@@ -897,48 +827,7 @@ const SubmitRequest = () => {
                 label="Phone Number" 
                 value={phone} 
                 onChange={(e) => setPhone(e.target.value)}
-                InputProps={{
-                  endAdornment: selectedProject?.partner_phone ? (
-                    <InputAdornment position="end">
-                      {otpVerified ? (
-                        <Chip 
-                          label="Verified ✅" 
-                          size="small" 
-                          sx={{ 
-                            fontWeight: 700, 
-                            bgcolor: 'rgba(16,185,129,0.15)', 
-                            color: '#10b981', 
-                            border: '1px solid rgba(16,185,129,0.4)',
-                            height: 28
-                          }} 
-                        />
-                      ) : (
-                        <Button 
-                          variant="contained" 
-                          size="small" 
-                          onClick={handleSendOtp} 
-                          disabled={otpLoading || partnerNameMismatch}
-                          sx={{ 
-                            background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', 
-                            fontWeight: 700,
-                            textTransform: 'none',
-                            fontSize: '0.72rem',
-                            py: 0.4,
-                            px: 1.2,
-                            boxShadow: 'none',
-                            borderRadius: '6px',
-                            '&:hover': {
-                              background: 'linear-gradient(135deg, #5052d9, #7c4dff)',
-                              boxShadow: 'none'
-                            }
-                          }}
-                        >
-                          {otpLoading ? 'Sending...' : otpSent ? 'Resend' : 'Verify'}
-                        </Button>
-                      )}
-                    </InputAdornment>
-                  ) : null
-                }}
+
               />
             </Grid>
             <Grid item xs={12} sm={6}></Grid>
@@ -1011,8 +900,8 @@ const SubmitRequest = () => {
           </Grid>
 
           {/* ── PARTNER VERIFICATION STATUS ── */}
-          {selectedProject && (selectedProject.partner_name || selectedProject.partner_phone) && (
-            <Paper sx={{ p: 2.5, mb: 3, borderRadius: 2, border: '1px solid', borderColor: partnerNameMismatch ? 'error.main' : otpRequired && !otpVerified ? 'warning.main' : 'success.main', background: partnerNameMismatch ? 'rgba(239,68,68,0.05)' : otpRequired && !otpVerified ? 'rgba(245,158,11,0.05)' : 'rgba(16,185,129,0.05)' }}>
+          {selectedProject && selectedProject.partner_name && (
+            <Paper sx={{ p: 2.5, mb: 3, borderRadius: 2, border: '1px solid', borderColor: partnerNameMismatch ? 'error.main' : 'success.main', background: partnerNameMismatch ? 'rgba(239,68,68,0.05)' : 'rgba(16,185,129,0.05)' }}>
               <Typography variant="subtitle2" fontWeight={700} mb={1.5} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 🔒 Partner Verification
               </Typography>
@@ -1035,33 +924,6 @@ const SubmitRequest = () => {
                 </Box>
               )}
 
-              {/* Phone OTP Check */}
-              {selectedProject.partner_phone && otpRequired && (
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  {otpVerified ? (
-                    <CheckCircle sx={{ color: 'success.main', fontSize: 20 }} />
-                  ) : (
-                    <Cancel sx={{ color: 'warning.main', fontSize: 20 }} />
-                  )}
-                  <Typography variant="body2">
-                    <strong>Phone OTP:</strong> {selectedProject.partner_phone.replace(/\d(?=\d{4})/g, '*')}
-                    {otpVerified 
-                      ? <Chip label="VERIFIED ✅" size="small" color="success" sx={{ ml: 1, fontWeight: 700, fontSize: 10 }} />
-                      : <Button 
-                          variant="contained" size="small" 
-                          onClick={handleSendOtp} 
-                          disabled={otpLoading || partnerNameMismatch}
-                          sx={{ ml: 1, py: 0.3, px: 1.5, fontSize: 11, fontWeight: 700, background: 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}
-                        >
-                          {otpLoading ? 'Sending...' : otpSent ? 'Resend OTP' : 'Send OTP'}
-                        </Button>
-                    }
-                  </Typography>
-                </Box>
-              )}
-
-              {otpError && <Typography variant="caption" color="error" sx={{ mt: 1, display: 'block' }}>{otpError}</Typography>}
-
               {partnerNameMismatch && (
                 <Typography variant="caption" color="error" sx={{ mt: 1.5, display: 'block', fontWeight: 600 }}>
                   ⚠️ Your Partner Name must match "{selectedProject.partner_name}" to submit this invoice. This is an anti-fraud measure.
@@ -1070,37 +932,7 @@ const SubmitRequest = () => {
             </Paper>
           )}
 
-          {/* OTP Input Dialog */}
-          <Dialog open={otpDialogOpen} onClose={() => setOtpDialogOpen(false)} maxWidth="xs" fullWidth>
-            <DialogTitle sx={{ fontWeight: 700 }}>🔑 Enter OTP Verification Code</DialogTitle>
-            <DialogContent>
-              <Typography variant="body2" color="text.secondary" mb={2}>
-                A 6-digit OTP has been sent to {selectedProject?.partner_phone?.replace(/\d(?=\d{4})/g, '*')}. 
-                Enter it below to verify your identity.
-              </Typography>
-              <TextField
-                fullWidth
-                label="Enter 6-digit OTP"
-                value={otpCode}
-                onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                inputProps={{ maxLength: 6, style: { letterSpacing: 8, fontSize: 24, textAlign: 'center', fontWeight: 700 } }}
-                placeholder="000000"
-                autoFocus
-              />
-              {otpError && <Typography variant="caption" color="error" sx={{ mt: 1, display: 'block' }}>{otpError}</Typography>}
-            </DialogContent>
-            <DialogActions sx={{ px: 3, pb: 2 }}>
-              <Button onClick={() => setOtpDialogOpen(false)}>Cancel</Button>
-              <Button 
-                variant="contained" 
-                onClick={handleVerifyOtp} 
-                disabled={otpCode.length !== 6 || otpLoading}
-                sx={{ background: 'linear-gradient(135deg, #10b981, #059669)', fontWeight: 700 }}
-              >
-                {otpLoading ? 'Verifying...' : 'Verify OTP'}
-              </Button>
-            </DialogActions>
-          </Dialog>
+
           <Divider sx={{ mb: 4 }} />
 
           {/* ── STEP 4: FINANCIAL DETAILS ── */}
