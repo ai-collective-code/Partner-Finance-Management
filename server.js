@@ -715,7 +715,7 @@ function verifyPassword(password, stored) {
 // Default local (non-Clerk) accounts seeded into DB on startup. Change these passwords
 // immediately in production — set DEFAULT_VENDOR_PASSWORD / DEFAULT_EMPLOYEE_PASSWORD.
 const DEFAULT_VENDORS = [
-  { id: 'vendor001', password: process.env.DEFAULT_VENDOR_PASSWORD || 'vendor123', name: 'Default Vendor' },
+  { id: 'partner001', password: process.env.DEFAULT_VENDOR_PASSWORD || 'partner123', name: 'Default Partner' },
 ];
 const DEFAULT_EMPLOYEES = [
   { id: 'employee001', password: process.env.DEFAULT_EMPLOYEE_PASSWORD || 'employee123', name: 'Default Employee' },
