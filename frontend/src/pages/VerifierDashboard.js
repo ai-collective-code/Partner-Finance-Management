@@ -119,7 +119,7 @@ const VerifierDashboard = ({ verifierId, title, subtitle, icon, accentColor }) =
 
       {/* Privacy Notice */}
       <Alert severity="info" sx={{ mb: 3, borderRadius: 2 }} icon={<VerifiedUser />}>
-        <strong>Privacy Mode:</strong> You only see requests where the vendor selected <strong>you</strong> as the first-line verifier. Other financial details are hidden.
+        <strong>Privacy Mode:</strong> You only see requests the partner assigned to <strong>you</strong>. Other financial details are hidden. This view is read-only — approval now starts at Owner Auth.
       </Alert>
 
       {/* Stats */}
@@ -482,7 +482,7 @@ export const TechDashboard = () => (
   <VerifierDashboard
     verifierId="rup"
     title="Tech Head Dashboard"
-    subtitle="Requests assigned to Rup for first-line tech verification"
+    subtitle="Requests assigned to Rup (view only)"
     icon="🔧"
     accentColor="#3b82f6"
   />
@@ -493,7 +493,7 @@ export const ContentDashboard = () => (
   <VerifierDashboard
     verifierId="soumana"
     title="Content Head Dashboard"
-    subtitle="Requests assigned to Soumana for first-line content verification"
+    subtitle="Requests assigned to Soumana (view only)"
     icon="🎨"
     accentColor="#f59e0b"
   />

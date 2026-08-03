@@ -15,7 +15,11 @@ const VendorLogin = () => {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(
+    new URLSearchParams(window.location.search).get('expired')
+      ? 'Your session expired (logins last 24 hours). Please sign in again.'
+      : ''
+  );
   const dispatch = useDispatch();
   const navigate = useNavigate();
 

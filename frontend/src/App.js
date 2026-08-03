@@ -17,6 +17,7 @@ import EmployeeLogin from './pages/EmployeeLogin';
 import AuthSync from './components/AuthSync';
 import { useSelector, useDispatch } from 'react-redux';
 import { logout, setAuth } from './store/authSlice';
+import { isTokenExpired } from './utils/token';
 
 const ROLE_LABELS = {
   DEV: { label: '👨‍💻 Developer', color: '#3b82f6' },
@@ -162,6 +163,11 @@ function LocalAuthWrapper({ children }) {
         const token = localStorage.getItem(tokenKey);
         const storedUser = localStorage.getItem(userKey);
         if (token && storedUser) {
+          if (isTokenExpired(token)) {
+            localStorage.removeItem(tokenKey);
+            localStorage.removeItem(userKey);
+            continue;
+          }
           try {
             const user = JSON.parse(storedUser);
             dispatch(setAuth({ user, token }));

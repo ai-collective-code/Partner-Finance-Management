@@ -2,6 +2,7 @@ import { useAuth } from '@clerk/clerk-react';
 import { useDispatch } from 'react-redux';
 import { useCallback } from 'react';
 import { updateToken } from '../store/authSlice';
+import { clearLocalSession } from '../utils/token';
 
 /**
  * useApi - a hook that returns a fetch function that automatically:
@@ -24,8 +25,17 @@ export function useApi() {
       // Ignore Clerk errors for local vendor sessions
     }
 
+    // Whether this call is authenticated by a local partner/employee JWT rather than Clerk.
+    // Those expire after 24h and cannot be refreshed, so a 401 means the session is dead.
+    let localLoginPath = null;
     if (!token) {
-      token = localStorage.getItem('vendorToken') || localStorage.getItem('employeeToken');
+      if (localStorage.getItem('vendorToken')) {
+        token = localStorage.getItem('vendorToken');
+        localLoginPath = '/vendor-login';
+      } else if (localStorage.getItem('employeeToken')) {
+        token = localStorage.getItem('employeeToken');
+        localLoginPath = '/employee-login';
+      }
     }
 
     const headers = { ...(options.headers || {}) };
@@ -40,7 +50,14 @@ export function useApi() {
     const API_BASE_URL = process.env.REACT_APP_API_URL || '';
     const targetUrl = url.startsWith('http') ? url : `${API_BASE_URL}${url}`;
 
-    return fetch(targetUrl, { ...options, headers });
+    const res = await fetch(targetUrl, { ...options, headers });
+
+    if (res.status === 401 && localLoginPath) {
+      clearLocalSession();
+      window.location.replace(`${localLoginPath}?expired=1`);
+    }
+
+    return res;
   }, [getToken, dispatch]);
 
   return { apiFetch };
