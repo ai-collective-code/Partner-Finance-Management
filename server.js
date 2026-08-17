@@ -674,7 +674,7 @@ const EMAIL_ROLE_MAP = {
   'bitmyth2005@gmail.com':   { role: 'VRF', name: 'Rup' },
   'abakashray846@gmail.com':   { role: 'VRF', name: 'Soumana' },
   'shlokachoudhary21@gmail.com': { role: 'FIN', name: 'Shloka' },
-  'onedebojit1@gmail.com': { role: 'OWN', name: 'Debojit' },
+  'aicollective909@gmail.com': { role: 'OWN', name: 'Debojit' },
   'cse2022017@rcciit.org.in':  { role: 'ADM', name: 'Admin' },
 };
 
