@@ -11,8 +11,7 @@ import {
 
 import { useApi } from '../hooks/useApi';
 import { useSelector } from 'react-redux';
-
-const API_BASE_URL = process.env.REACT_APP_API_URL || '';
+import AuthedFile from '../components/AuthedFile';
 
 // New workflow: PND → VRF → OWN → FIN → DSB
 const STATUS_FLOW = ['PND', 'OWN', 'FIN', 'DSB'];
@@ -565,25 +564,27 @@ const FinanceReview = () => {
                               <Typography variant="caption" color="success.main" sx={{ display: 'block', mb: 0.5, fontWeight: 700 }}>
                                 📸 Attached Cancelled Cheque
                               </Typography>
-                              {meta.chequeFileHash.toLowerCase().endsWith('.pdf') ? (
-                                <Box sx={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden' }}>
-                                  <iframe
-                                    src={`${API_BASE_URL}/uploads/${meta.chequeFileHash}`}
-                                    title="Cancelled Cheque PDF"
-                                    width="100%"
-                                    height="250px"
-                                    style={{ border: 'none', backgroundColor: '#fff', borderRadius: 4 }}
+                              <AuthedFile name={meta.chequeFileHash}>
+                                {(chequeUrl) => meta.chequeFileHash.toLowerCase().endsWith('.pdf') ? (
+                                  <Box sx={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden' }}>
+                                    <iframe
+                                      src={chequeUrl}
+                                      title="Cancelled Cheque PDF"
+                                      width="100%"
+                                      height="250px"
+                                      style={{ border: 'none', backgroundColor: '#fff', borderRadius: 4 }}
+                                    />
+                                  </Box>
+                                ) : (
+                                  <Box
+                                    component="img"
+                                    src={chequeUrl}
+                                    alt="Cancelled Cheque"
+                                    sx={{ maxWidth: '100%', maxHeight: 200, objectFit: 'contain', borderRadius: 2, border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer' }}
+                                    onClick={() => setFullImage(chequeUrl)}
                                   />
-                                </Box>
-                              ) : (
-                                <Box 
-                                  component="img"
-                                  src={`${API_BASE_URL}/uploads/${meta.chequeFileHash}`}
-                                  alt="Cancelled Cheque"
-                                  sx={{ maxWidth: '100%', maxHeight: 200, objectFit: 'contain', borderRadius: 2, border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer' }}
-                                  onClick={() => setFullImage(`${API_BASE_URL}/uploads/${meta.chequeFileHash}`)}
-                                />
-                              )}
+                                )}
+                              </AuthedFile>
                             </Grid>
                           )}
                         </Grid>
@@ -671,42 +672,44 @@ const FinanceReview = () => {
                       <Typography variant="overline" color="text.disabled" sx={{ letterSpacing: 1, mb: 1, display: 'block' }}>
                         📄 {meta?.type === 'salary' ? 'Attached Payslip / Proof Document' : 'Original Partner Invoice'}
                       </Typography>
-                      {isPdf ? (
-                        <Box sx={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden' }}>
-                          <iframe
-                            src={`${API_BASE_URL}/uploads/${selected.file_hash}`}
-                            title="Invoice PDF"
-                            width="100%"
-                            height="400px"
-                            style={{ border: 'none', backgroundColor: '#fff' }}
-                          />
-                          <Box sx={{ p: 1, textAlign: 'center', borderTop: '1px solid rgba(255,255,255,0.1)', bgcolor: 'rgba(0,0,0,0.2)' }}>
-                            <Button
-                              variant="outlined"
-                              size="small"
-                              component="a"
-                              href={`${API_BASE_URL}/uploads/${selected.file_hash}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                            >
-                              📂 Open PDF in New Tab
-                            </Button>
+                      <AuthedFile name={selected.file_hash}>
+                        {(fileUrl) => isPdf ? (
+                          <Box sx={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden' }}>
+                            <iframe
+                              src={fileUrl}
+                              title="Invoice PDF"
+                              width="100%"
+                              height="400px"
+                              style={{ border: 'none', backgroundColor: '#fff' }}
+                            />
+                            <Box sx={{ p: 1, textAlign: 'center', borderTop: '1px solid rgba(255,255,255,0.1)', bgcolor: 'rgba(0,0,0,0.2)' }}>
+                              <Button
+                                variant="outlined"
+                                size="small"
+                                component="a"
+                                href={fileUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                              >
+                                📂 Open PDF in New Tab
+                              </Button>
+                            </Box>
                           </Box>
-                        </Box>
-                      ) : (
-                        <>
-                          <Box
-                            component="img"
-                            src={`${API_BASE_URL}/uploads/${selected.file_hash}`}
-                            alt="Attached document"
-                            sx={{ width: '100%', maxHeight: 400, objectFit: 'contain', borderRadius: 2, border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer' }}
-                            onClick={() => setFullImage(`${API_BASE_URL}/uploads/${selected.file_hash}`)}
-                          />
-                          <Typography variant="caption" color="primary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 1, cursor: 'pointer' }} onClick={() => setFullImage(`${API_BASE_URL}/uploads/${selected.file_hash}`)}>
-                            <Visibility fontSize="inherit" /> Click to view full size
-                          </Typography>
-                        </>
-                      )}
+                        ) : (
+                          <>
+                            <Box
+                              component="img"
+                              src={fileUrl}
+                              alt="Attached document"
+                              sx={{ width: '100%', maxHeight: 400, objectFit: 'contain', borderRadius: 2, border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer' }}
+                              onClick={() => setFullImage(fileUrl)}
+                            />
+                            <Typography variant="caption" color="primary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 1, cursor: 'pointer' }} onClick={() => setFullImage(fileUrl)}>
+                              <Visibility fontSize="inherit" /> Click to view full size
+                            </Typography>
+                          </>
+                        )}
+                      </AuthedFile>
                     </Paper>
                   );
                 })()}

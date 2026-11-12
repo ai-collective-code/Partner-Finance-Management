@@ -12,8 +12,7 @@ import {
 import { useApi } from '../hooks/useApi';
 
 import { useSelector } from 'react-redux';
-
-const API_BASE_URL = process.env.REACT_APP_API_URL || '';
+import AuthedFile from '../components/AuthedFile';
 
 const STATUS_FLOW = ['PND', 'OWN', 'FIN', 'DSB'];
 
@@ -239,10 +238,11 @@ const VerifierDashboard = ({ verifierId, title, subtitle, icon, accentColor }) =
                 return (
                   <Box sx={{ mb: 3 }}>
                     <Typography variant="caption" color="text.secondary" mb={1} display="block">Attached Invoice</Typography>
-                    {isPdf ? (
+                    <AuthedFile name={selected.file_hash}>
+                    {(fileUrl) => isPdf ? (
                       <Box sx={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden' }}>
                         <iframe
-                          src={`${API_BASE_URL}/uploads/${selected.file_hash}`}
+                          src={fileUrl}
                           title="Invoice PDF"
                           width="100%"
                           height="350px"
@@ -253,7 +253,7 @@ const VerifierDashboard = ({ verifierId, title, subtitle, icon, accentColor }) =
                             variant="outlined"
                             size="small"
                             component="a"
-                            href={`${API_BASE_URL}/uploads/${selected.file_hash}`}
+                            href={fileUrl}
                             target="_blank"
                             rel="noopener noreferrer"
                           >
@@ -265,9 +265,9 @@ const VerifierDashboard = ({ verifierId, title, subtitle, icon, accentColor }) =
                       <Box sx={{ position: 'relative' }}>
                         <Box
                           component="img"
-                          src={`${API_BASE_URL}/uploads/${selected.file_hash}`}
+                          src={fileUrl}
                           alt="Invoice"
-                          onClick={() => setImagePreview(`${API_BASE_URL}/uploads/${selected.file_hash}`)}
+                          onClick={() => setImagePreview(fileUrl)}
                           sx={{
                             width: '100%', maxHeight: 250, objectFit: 'contain',
                             borderRadius: 2, border: '1px solid rgba(255,255,255,0.1)',
@@ -294,7 +294,7 @@ const VerifierDashboard = ({ verifierId, title, subtitle, icon, accentColor }) =
                             size="small"
                             variant="outlined"
                             startIcon={<ZoomIn />}
-                            onClick={() => setImagePreview(`${API_BASE_URL}/uploads/${selected.file_hash}`)}
+                            onClick={() => setImagePreview(fileUrl)}
                             sx={{ flex: 1, borderColor: 'rgba(99,102,241,0.4)', color: '#818cf8',
                               '&:hover': { borderColor: '#6366f1', bgcolor: 'rgba(99,102,241,0.08)' } }}
                           >
@@ -305,7 +305,7 @@ const VerifierDashboard = ({ verifierId, title, subtitle, icon, accentColor }) =
                             variant="outlined"
                             startIcon={<OpenInNew />}
                             component="a"
-                            href={`${API_BASE_URL}/uploads/${selected.file_hash}`}
+                            href={fileUrl}
                             target="_blank"
                             rel="noopener noreferrer"
                             sx={{ flex: 1, borderColor: 'rgba(255,255,255,0.15)', color: 'text.secondary',
@@ -316,6 +316,7 @@ const VerifierDashboard = ({ verifierId, title, subtitle, icon, accentColor }) =
                         </Box>
                       </Box>
                     )}
+                    </AuthedFile>
                   </Box>
                 );
               })()}

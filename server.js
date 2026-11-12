@@ -47,7 +47,8 @@ app.use(helmet({
       fontSrc: ["'self'", "https://fonts.gstatic.com"],
       imgSrc: ["'self'", "data:", "blob:", "https://img.clerk.com", "https://*.clerk.accounts.dev"],
       connectSrc: ["'self'", "https://*.clerk.accounts.dev", "https://api.clerk.com", "https://cdn.jsdelivr.net"],
-      frameSrc: ["'self'", "https://*.clerk.accounts.dev", "https://challenges.cloudflare.com"],
+      // blob: lets the UI preview PDFs fetched through the authenticated /api/files endpoint
+      frameSrc: ["'self'", "blob:", "https://*.clerk.accounts.dev", "https://challenges.cloudflare.com"],
       workerSrc: ["'self'", "blob:"],
     }
   },
@@ -338,9 +339,11 @@ async function initPostgres(pgConfig) {
     mime_type TEXT,
     file_size INTEGER,
     file_hash TEXT,
+    uploaded_by TEXT,
     uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (request_id) REFERENCES requests(id)
   )`);
+  await pool.query(`ALTER TABLE attachments ADD COLUMN IF NOT EXISTS uploaded_by TEXT`).catch(() => {});
 
   await pool.query(`CREATE TABLE IF NOT EXISTS subscriptions (
     id TEXT PRIMARY KEY,
@@ -539,9 +542,11 @@ function initSQLite() {
         mime_type TEXT,
         file_size INTEGER,
         file_hash TEXT,
+        uploaded_by TEXT,
         uploaded_at TEXT DEFAULT (datetime('now')),
         FOREIGN KEY (request_id) REFERENCES requests(id)
       )`);
+      sqliteDb.run(`ALTER TABLE attachments ADD COLUMN uploaded_by TEXT`, () => {});
 
       sqliteDb.run(`CREATE TABLE IF NOT EXISTS subscriptions (
         id TEXT PRIMARY KEY,
@@ -668,15 +673,45 @@ function signAuditEntry(reqId, actor, prev, next, comment, ts) {
 }
 
 // ══════════ EMAIL → ROLE MAPPING (Fixed Roles) ══════════
-const EMAIL_ROLE_MAP = {
-  'rayabakash@gmail.com':      { role: 'OWN', name: 'Abakash' },
-  'abakashray57@gmail.com':    { role: 'OWN', name: 'Abakash' },
-  'bitmyth2005@gmail.com':   { role: 'VRF', name: 'Rup' },
-  'abakashray846@gmail.com':   { role: 'VRF', name: 'Soumana' },
-  'shlokachoudhary21@gmail.com': { role: 'FIN', name: 'Shloka' },
-  'aicollective909@gmail.com': { role: 'OWN', name: 'Debojit' },
-  'cse2022017@rcciit.org.in':  { role: 'ADM', name: 'Admin' },
-};
+// Team emails are NOT kept in source (this repository is public). The map is read from
+// the EMAIL_ROLE_MAP env var (JSON) or, if that is unset, from a git-ignored roles.json
+// next to this file. See roles.example.json for the format.
+const VALID_ROLES = ['DEV', 'FIN', 'OWN', 'ADM', 'VND', 'EMP', 'VRF'];
+
+function loadEmailRoleMap() {
+  let raw = process.env.EMAIL_ROLE_MAP;
+  let source = 'EMAIL_ROLE_MAP env var';
+  if (!raw) {
+    const rolesFile = path.join(__dirname, 'roles.json');
+    if (fs.existsSync(rolesFile)) {
+      raw = fs.readFileSync(rolesFile, 'utf8');
+      source = 'roles.json';
+    }
+  }
+  if (!raw) {
+    logger.warn('No EMAIL_ROLE_MAP env var or roles.json found — every Clerk user will get role NONE (no access).');
+    return {};
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    logger.error(`Could not parse ${source} as JSON (${err.message}). Refusing to start with a broken role map.`);
+    process.exit(1);
+  }
+  const map = {};
+  for (const [email, entry] of Object.entries(parsed || {})) {
+    if (!entry || !VALID_ROLES.includes(entry.role)) {
+      logger.warn(`Skipping role mapping for "${email}" in ${source}: role must be one of ${VALID_ROLES.join(', ')}.`);
+      continue;
+    }
+    map[email.toLowerCase()] = { role: entry.role, name: entry.name || email };
+  }
+  logger.info(`Loaded ${Object.keys(map).length} email role mapping(s) from ${source}.`);
+  return map;
+}
+
+const EMAIL_ROLE_MAP = loadEmailRoleMap();
 
 function getRoleByEmail(email) {
   if (!email) return null;
@@ -712,27 +747,44 @@ function verifyPassword(password, stored) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-// Default local (non-Clerk) accounts seeded into DB on startup. Change these passwords
-// immediately in production — set DEFAULT_VENDOR_PASSWORD / DEFAULT_EMPLOYEE_PASSWORD.
+// Default local (non-Clerk) accounts seeded into DB on startup. Their passwords come ONLY
+// from DEFAULT_VENDOR_PASSWORD / DEFAULT_EMPLOYEE_PASSWORD — there is no built-in fallback,
+// because the old fallbacks ('partner123' / 'employee123') are public in this repository.
 const DEFAULT_VENDORS = [
-  { id: 'partner001', password: process.env.DEFAULT_VENDOR_PASSWORD || 'partner123', name: 'Default Partner' },
+  { id: 'partner001', password: process.env.DEFAULT_VENDOR_PASSWORD, name: 'Default Partner' },
 ];
 const DEFAULT_EMPLOYEES = [
-  { id: 'employee001', password: process.env.DEFAULT_EMPLOYEE_PASSWORD || 'employee123', name: 'Default Employee' },
+  { id: 'employee001', password: process.env.DEFAULT_EMPLOYEE_PASSWORD, name: 'Default Employee' },
 ];
+// Passwords that earlier versions seeded automatically. An account still using one of these
+// is replaced with the configured password on startup (or loudly flagged if none is set).
+const LEGACY_DEFAULT_PASSWORDS = { VND: 'partner123', EMP: 'employee123' };
 
 function seedLocalAccounts(accounts, role, envVarName) {
-  if (!process.env[envVarName]) {
-    logger.warn(`${envVarName} not set — using the built-in default ${role} password. Set it in .env before going to production.`);
-  }
+  const legacyPassword = LEGACY_DEFAULT_PASSWORDS[role];
   accounts.forEach(v => {
-    const hashedPw = hashPassword(v.password);
-    db.run('INSERT OR IGNORE INTO users (id, name, role, hash, updated_at) VALUES (?, ?, ?, ?, ?)',
-      [v.id, v.name, role, hashedPw, new Date().toISOString()]);
-    // Only seed/reset the password if this row doesn't already have a hash from a real login flow.
     db.get('SELECT hash FROM users WHERE id = ?', [v.id], (err, row) => {
-      if (!err && row && !row.hash) {
-        db.run('UPDATE users SET hash = ?, name = ? WHERE id = ?', [hashedPw, v.name, v.id]);
+      if (err) return logger.error({ err }, `Could not check local account ${v.id}`);
+      const usesLegacyDefault = !!(row && row.hash && verifyPassword(legacyPassword, row.hash));
+
+      if (!v.password) {
+        if (usesLegacyDefault) {
+          logger.error(`Account ${v.id} still accepts the publicly known default password. Set ${envVarName} and restart to replace it.`);
+        } else if (!row) {
+          logger.warn(`${envVarName} not set — not creating the ${v.id} account.`);
+        }
+        return;
+      }
+
+      const hashedPw = hashPassword(v.password);
+      if (!row) {
+        db.run('INSERT OR IGNORE INTO users (id, name, role, hash, updated_at) VALUES (?, ?, ?, ?, ?)',
+          [v.id, v.name, role, hashedPw, new Date().toISOString()]);
+      } else if (!row.hash || usesLegacyDefault) {
+        // Fill in a missing hash, or rotate away from the public default. A password that was
+        // already changed to something else is left alone.
+        db.run('UPDATE users SET hash = ?, updated_at = ? WHERE id = ?', [hashedPw, new Date().toISOString(), v.id]);
+        if (usesLegacyDefault) logger.warn(`Replaced the public default password on ${v.id} with ${envVarName}.`);
       }
     });
   });
@@ -1251,6 +1303,10 @@ app.get('/api/requests', authenticateToken, (req, res, next) => {
     // Employees & Vendors only see their own
     baseWhere += ' AND requester = ?';
     params.push(req.user.id);
+  } else if (req.user.role === 'VRF') {
+    // Verifiers only see requests the submitter assigned to them (matched by name)
+    baseWhere += ' AND LOWER(TRIM(verifier)) = ?';
+    params.push((req.user.name || '').trim().toLowerCase());
   }
   // FIN, OWN, ADM see all requests
   if (status) {
@@ -1337,21 +1393,24 @@ app.post('/api/action', authenticateToken, actionLimiter, validate(actionSchema)
     // PND to OWN, and OWN/FIN are each held by exactly one person, so there's no
     // remaining ambiguity for the state_transitions role check below to resolve.
 
-    // Maker-checker: prevent self-approval (disabled for demo so you can test the entire workflow with a single account!)
-    /*
-    if (reqRow.requester === req.user.id && ['FIN', 'OWN', 'DSB'].includes(nextState)) {
+    // Maker-checker: nobody may approve or pay out their own request.
+    // ALLOW_SELF_APPROVAL=true turns this off for single-account local demos only.
+    if (process.env.ALLOW_SELF_APPROVAL !== 'true' &&
+        reqRow.requester === req.user.id && ['FIN', 'OWN', 'DSB'].includes(nextState)) {
       return res.status(403).json({ error: 'Self-approval is prohibited. Another authorized user must approve.' });
     }
-    */
 
-    // Validate state transition
+    // Validate state transition. Every role, ADM included, is limited to the moves listed in
+    // state_transitions (ADM already has its own override rows there), so no one can jump a
+    // request straight from PND to DSB. 'SYSTEM' rows are reserved for automated jobs and are
+    // deliberately NOT matched here — otherwise any signed-in user (a partner included) could
+    // disburse a request sitting at FIN.
     const prevState = reqRow.status;
-    db.get('SELECT * FROM state_transitions WHERE from_state = ? AND to_state = ? AND (required_role = ? OR required_role = ?)',
-      [prevState, nextState, req.user.role, 'SYSTEM'], (err2, transition) => {
+    db.get('SELECT * FROM state_transitions WHERE from_state = ? AND to_state = ? AND required_role = ?',
+      [prevState, nextState, req.user.role], (err2, transition) => {
         if (err2) return next(err2);
-        
-        // ADM can do anything, otherwise check transition table
-        if (!transition && req.user.role !== 'ADM') {
+
+        if (!transition) {
           return res.status(403).json({ error: `Invalid state transition: ${prevState} → ${nextState} for role ${req.user.role}` });
         }
 
@@ -1381,9 +1440,9 @@ app.get('/api/audit', authenticateToken, (req, res, next) => {
   const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
   const offset = (page - 1) * limit;
   const reqId = req.query.reqId;
-  // DEV/EMP/VND only ever see requests they submitted themselves (mirrors /api/requests scoping) —
-  // everyone else (FIN/OWN/ADM/VRF) legitimately needs cross-request audit visibility.
-  const isRestricted = ['DEV', 'EMP', 'VND'].includes(req.user.role);
+  // Only FIN/OWN/ADM see every request's audit trail. Everyone else sees the trail of requests
+  // they submitted, and a VRF also sees requests assigned to them (mirrors /api/requests scoping).
+  const isRestricted = !['FIN', 'OWN', 'ADM'].includes(req.user.role);
 
   if (reqId) {
     // Fetch logs for a specific request, join with users to get actor names
@@ -1408,9 +1467,12 @@ app.get('/api/audit', authenticateToken, (req, res, next) => {
     };
 
     if (isRestricted) {
-      db.get('SELECT requester FROM requests WHERE id = ?', [reqId], (err, reqRow) => {
+      db.get('SELECT requester, verifier FROM requests WHERE id = ?', [reqId], (err, reqRow) => {
         if (err) return next(err);
-        if (!reqRow || reqRow.requester !== req.user.id) {
+        const userName = (req.user.name || '').trim().toLowerCase();
+        const isAssignedVerifier = reqRow && req.user.role === 'VRF' && userName &&
+          (reqRow.verifier || '').trim().toLowerCase() === userName;
+        if (!reqRow || (reqRow.requester !== req.user.id && !isAssignedVerifier)) {
           return res.status(403).json({ error: 'You do not have access to this request\'s audit trail.' });
         }
         runQuery();
@@ -1470,7 +1532,8 @@ app.post('/api/users/:id/role', authenticateToken, requireRole('ADM'), validate(
   });
 });
 
-app.get('/api/users', authenticateToken, (req, res, next) => {
+// Full user list (ids, names, roles) — admins only; nothing in the UI needs it for other roles.
+app.get('/api/users', authenticateToken, requireRole('ADM'), (req, res, next) => {
   db.all("SELECT id, name, role FROM users", [], (err, rows) => {
     if (err) return next(err);
     res.json(rows);
@@ -1480,7 +1543,8 @@ app.get('/api/users', authenticateToken, (req, res, next) => {
 // ══════════ NEW ENDPOINTS (SUBSCRIPTIONS, QUERIES, INVOICES) ══════════
 
 // Subscriptions
-app.get('/api/subscriptions', authenticateToken, (req, res, next) => {
+// Same roles that can add subscriptions (and that see the Subscriptions page in the sidebar)
+app.get('/api/subscriptions', authenticateToken, requireRole('FIN', 'OWN', 'ADM'), (req, res, next) => {
   db.all("SELECT * FROM subscriptions", [], (err, rows) => {
     if (err) return next(err);
     res.json(rows);
@@ -1507,13 +1571,12 @@ app.get('/api/queries', authenticateToken, (req, res, next) => {
   const dbRole = req.user.role;
   const allowedManagerRoles = ['FIN', 'OWN', 'ADM'];
   const canViewAs = viewAs && allowedManagerRoles.includes(viewAs) &&
-    (dbRole === viewAs || dbRole === 'ADM' || dbRole === 'DEV');
+    (dbRole === viewAs || dbRole === 'ADM');
 
   if (canViewAs) {
     // Allow viewing as Finance or Owner inbox if:
     // 1. Their DB role matches viewAs
     // 2. Their DB role is ADM (admin can see everything)
-    // 3. Their DB role is DEV (allow for UI role-switching demo)
     query = "SELECT * FROM employee_queries WHERE recipient_role = ? ORDER BY created_at DESC";
     params.push(viewAs);
   } else if (dbRole === 'FIN' || dbRole === 'OWN') {
@@ -1547,8 +1610,8 @@ app.post('/api/queries', authenticateToken, (req, res, next) => {
   });
 });
 
-// Reply to Query (Finance/Owner/ADM or UI role-switch demo)
-app.post('/api/queries/:id/reply', authenticateToken, requireRole('FIN', 'OWN', 'ADM', 'DEV'), (req, res, next) => {
+// Reply to Query (Finance/Owner/ADM only — role switching was removed, so DEV no longer qualifies)
+app.post('/api/queries/:id/reply', authenticateToken, requireRole('FIN', 'OWN', 'ADM'), (req, res, next) => {
   const { response } = req.body;
   if (!response) return res.status(400).json({ error: 'response text is required' });
   db.run("UPDATE employee_queries SET response = ?, status = 'Answered', updated_at = ? WHERE id = ?",
@@ -1588,8 +1651,47 @@ const upload = multer({
   }
 });
 
-// Expose uploads directory to frontend
-app.use('/uploads', express.static(uploadsDir));
+// Uploaded invoices, cancelled cheques and payslips contain bank details, so they are NOT
+// served statically. They are only available through this authenticated endpoint:
+//  - FIN / OWN / ADM can open any file (they review every request);
+//  - the person who uploaded a file can open it (preview before submitting);
+//  - the requester of a request that uses the file can open it;
+//  - a VRF can open the files of requests assigned to them.
+const UPLOAD_NAME_RE = /^invoice_\d+_[0-9a-f]{8}\.(jpg|png|webp|gif|bmp|tiff|heic|heif|pdf)$/;
+const FULL_FILE_ACCESS_ROLES = ['FIN', 'OWN', 'ADM'];
+
+app.get('/api/files/:name', authenticateToken, (req, res, next) => {
+  const name = req.params.name;
+  if (!UPLOAD_NAME_RE.test(name)) return res.status(404).json({ error: 'File not found' });
+
+  const sendIt = () => {
+    res.sendFile(path.join(uploadsDir, name), {
+      headers: { 'Content-Disposition': 'inline', 'Cache-Control': 'private, no-store' }
+    }, (err) => {
+      if (err && !res.headersSent) res.status(404).json({ error: 'File not found' });
+    });
+  };
+  const deny = () => res.status(403).json({ error: 'You do not have access to this file.' });
+
+  if (FULL_FILE_ACCESS_ROLES.includes(req.user.role)) return sendIt();
+
+  db.get('SELECT uploaded_by FROM attachments WHERE id = ?', [name], (err, att) => {
+    if (err) return next(err);
+    if (att && att.uploaded_by === req.user.id) return sendIt();
+
+    // The invoice is stored in requests.file_hash; a cancelled cheque only inside the metadata JSON.
+    db.all('SELECT requester, verifier FROM requests WHERE deleted_at IS NULL AND (file_hash = ? OR metadata LIKE ?)',
+      [name, `%"${name}"%`], (err2, rows) => {
+        if (err2) return next(err2);
+        const userName = (req.user.name || '').trim().toLowerCase();
+        const allowed = (rows || []).some(r =>
+          r.requester === req.user.id ||
+          (req.user.role === 'VRF' && userName && (r.verifier || '').trim().toLowerCase() === userName)
+        );
+        return allowed ? sendIt() : deny();
+      });
+  });
+});
 
 // Vendor Invoice Upload - returns file hash to be submitted with request form
 // ══════════ HIGH-CLASS OCR SYSTEM (Gemini + Tesseract Fallback) ══════════
@@ -1884,6 +1986,19 @@ app.post('/api/invoices/upload', authenticateToken, upload.single('invoice'), as
   const file = req.file;
   const skipOcr = req.body.skip_ocr === 'true' || req.body.skip_ocr === true;
   logger.info({ filename: file.filename, size: file.size, mime: file.mimetype, skipOcr }, 'Invoice file uploaded for processing');
+
+  // Record who uploaded the file so /api/files can let them (and only them, besides
+  // reviewers) preview it before the request is submitted.
+  try {
+    await new Promise((resolve, reject) => {
+      db.run('INSERT INTO attachments (id, filename, mime_type, file_size, file_hash, uploaded_by) VALUES (?, ?, ?, ?, ?, ?)',
+        [file.filename, file.originalname, file.mimetype, file.size, file.filename, req.user.id],
+        (err) => (err ? reject(err) : resolve()));
+    });
+  } catch (err) {
+    try { fs.unlinkSync(file.path); } catch (e) {}
+    return next(err);
+  }
 
   // If skip_ocr is set (e.g. for cancelled cheque / bank doc uploads), skip AI OCR for speed
   if (skipOcr) {

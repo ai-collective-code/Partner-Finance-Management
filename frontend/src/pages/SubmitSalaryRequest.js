@@ -6,8 +6,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../hooks/useApi';
 import { generateInvoicePdf } from '../utils/generateInvoicePdf';
-
-const API_BASE_URL = process.env.REACT_APP_API_URL || '';
+import AuthedFile from '../components/AuthedFile';
 
 const INDIA_CITIES = {
   "Mumbai": "Maharashtra", "Delhi": "Delhi", "Bengaluru": "Karnataka",
@@ -351,15 +350,19 @@ const SubmitSalaryRequest = () => {
                 </Button>
               ) : (
                 <>
-                  <Button
-                    variant="outlined"
-                    color="primary"
-                    href={`${API_BASE_URL}/uploads/${fileHash}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    👁️ Preview Document
-                  </Button>
+                  <AuthedFile name={fileHash}>
+                    {(fileUrl) => (
+                      <Button
+                        variant="outlined"
+                        color="primary"
+                        href={fileUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        👁️ Preview Document
+                      </Button>
+                    )}
+                  </AuthedFile>
                   <Button variant="outlined" color="error" onClick={() => { setFileHash(''); setUploadMessage(''); }}>
                     ❌ Remove Document
                   </Button>
@@ -379,16 +382,18 @@ const SubmitSalaryRequest = () => {
                   📄 Document Preview
                 </Typography>
                 <Box sx={{ p: 1.5, backgroundColor: 'rgba(0,0,0,0.2)', textAlign: 'center' }}>
-                  {fileHash.toLowerCase().endsWith('.pdf') ? (
-                    <iframe src={`${API_BASE_URL}/uploads/${fileHash}`} title="Document Preview" width="100%" height="200px" style={{ border: 'none', backgroundColor: '#fff', borderRadius: 4 }} />
-                  ) : (
-                    <img
-                      src={`${API_BASE_URL}/uploads/${fileHash}`}
-                      alt="Document Preview"
-                      style={{ maxWidth: '100%', maxHeight: 200, borderRadius: 4, display: 'inline-block' }}
-                      onError={(e) => { e.target.style.display = 'none'; }}
-                    />
-                  )}
+                  <AuthedFile name={fileHash}>
+                    {(fileUrl) => fileHash.toLowerCase().endsWith('.pdf') ? (
+                      <iframe src={fileUrl} title="Document Preview" width="100%" height="200px" style={{ border: 'none', backgroundColor: '#fff', borderRadius: 4 }} />
+                    ) : (
+                      <img
+                        src={fileUrl}
+                        alt="Document Preview"
+                        style={{ maxWidth: '100%', maxHeight: 200, borderRadius: 4, display: 'inline-block' }}
+                        onError={(e) => { e.target.style.display = 'none'; }}
+                      />
+                    )}
+                  </AuthedFile>
                 </Box>
               </Box>
             )}
@@ -440,12 +445,16 @@ const SubmitSalaryRequest = () => {
                 <Typography variant="caption" color="text.secondary" display="block" mb={1.5}>
                   See the preview in "3. Payslip / Proof Document" above. Remove it there if you'd like to attach a different one.
                 </Typography>
-                <Button
-                  variant="outlined" size="small" color="primary"
-                  href={`${API_BASE_URL}/uploads/${fileHash}`} target="_blank" rel="noopener noreferrer"
-                >
-                  👁️ Preview Attached Document
-                </Button>
+                <AuthedFile name={fileHash}>
+                  {(fileUrl) => (
+                    <Button
+                      variant="outlined" size="small" color="primary"
+                      href={fileUrl} target="_blank" rel="noopener noreferrer"
+                    >
+                      👁️ Preview Attached Document
+                    </Button>
+                  )}
+                </AuthedFile>
               </>
             ) : (
               <>

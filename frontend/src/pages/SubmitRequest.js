@@ -8,6 +8,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../hooks/useApi';
 import { generateInvoicePdf } from '../utils/generateInvoicePdf';
+import AuthedFile from '../components/AuthedFile';
 import {
   CheckCircle, Cancel, Palette,
   AutoAwesome, PlayForWork, VerifiedUser, HelpOutline, TaskAlt
@@ -158,8 +159,6 @@ const INDIA_CITIES = {
   "Daman": "Dadra and Nagar Haveli and Daman and Diu", "Silvassa": "Dadra and Nagar Haveli and Daman and Diu",
   "Kavaratti": "Lakshadweep"
 };
-
-const API_BASE_URL = process.env.REACT_APP_API_URL || '';
 
 // ── Field Verification Badge Component ──
 const FieldVerifyBadge = ({ fieldKey, verifications, onVerify }) => {
@@ -676,21 +675,23 @@ const SubmitRequest = () => {
                       📄 Uploaded Invoice Preview
                     </Typography>
                     <Box sx={{ p: 1.5, backgroundColor: 'rgba(0,0,0,0.2)', textAlign: 'center' }}>
-                      {fileHash.toLowerCase().endsWith('.pdf') ? (
-                        <Box>
-                          <iframe src={`${API_BASE_URL}/uploads/${fileHash}`} title="Invoice PDF Preview" width="100%" height="200px" style={{ border: 'none', backgroundColor: '#fff', borderRadius: 4 }} />
-                          <Button variant="outlined" size="small" component="a" href={`${API_BASE_URL}/uploads/${fileHash}`} target="_blank" rel="noopener noreferrer" sx={{ mt: 1 }}>
-                            📂 Open PDF in New Tab
-                          </Button>
-                        </Box>
-                      ) : (
-                        <img 
-                          src={`${API_BASE_URL}/uploads/${fileHash}`} 
-                          alt="Invoice Preview"
-                          style={{ maxWidth: '100%', maxHeight: 200, borderRadius: 4, display: 'inline-block' }}
-                          onError={(e) => { e.target.style.display = 'none'; }}
-                        />
-                      )}
+                      <AuthedFile name={fileHash}>
+                        {(fileUrl) => fileHash.toLowerCase().endsWith('.pdf') ? (
+                          <Box>
+                            <iframe src={fileUrl} title="Invoice PDF Preview" width="100%" height="200px" style={{ border: 'none', backgroundColor: '#fff', borderRadius: 4 }} />
+                            <Button variant="outlined" size="small" component="a" href={fileUrl} target="_blank" rel="noopener noreferrer" sx={{ mt: 1 }}>
+                              📂 Open PDF in New Tab
+                            </Button>
+                          </Box>
+                        ) : (
+                          <img
+                            src={fileUrl}
+                            alt="Invoice Preview"
+                            style={{ maxWidth: '100%', maxHeight: 200, borderRadius: 4, display: 'inline-block' }}
+                            onError={(e) => { e.target.style.display = 'none'; }}
+                          />
+                        )}
+                      </AuthedFile>
                     </Box>
                   </Box>
                 </Grid>
@@ -1050,15 +1051,19 @@ const SubmitRequest = () => {
                     </Button>
                   ) : (
                     <>
-                      <Button
-                        variant="outlined"
-                        color="primary"
-                        href={`${API_BASE_URL}/uploads/${chequeFileHash}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        👁️ Preview Document
-                      </Button>
+                      <AuthedFile name={chequeFileHash}>
+                        {(chequeUrl) => (
+                          <Button
+                            variant="outlined"
+                            color="primary"
+                            href={chequeUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            👁️ Preview Document
+                          </Button>
+                        )}
+                      </AuthedFile>
                       <Button variant="outlined" color="error" onClick={() => { setChequeFileHash(''); setChequeUploadMessage(''); }}>
                         ❌ Remove Cancelled Cheque
                       </Button>
@@ -1169,12 +1174,16 @@ const SubmitRequest = () => {
                 <Typography variant="caption" color="text.secondary" display="block" mb={1.5}>
                   See the preview in "1. Upload Partner Invoice" above. Remove it there if you'd like to attach a different one.
                 </Typography>
-                <Button
-                  variant="outlined" size="small" color="primary"
-                  href={`${API_BASE_URL}/uploads/${fileHash}`} target="_blank" rel="noopener noreferrer"
-                >
-                  👁️ Preview Attached Invoice
-                </Button>
+                <AuthedFile name={fileHash}>
+                  {(fileUrl) => (
+                    <Button
+                      variant="outlined" size="small" color="primary"
+                      href={fileUrl} target="_blank" rel="noopener noreferrer"
+                    >
+                      👁️ Preview Attached Invoice
+                    </Button>
+                  )}
+                </AuthedFile>
               </>
             ) : (
               <>
