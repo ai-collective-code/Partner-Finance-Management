@@ -20,6 +20,17 @@ const todayLocal = () => {
 };
 // Suggest a client code from the project name: first 3 letters of the first word ("Dabur AD Oil" → DAB)
 const suggestClientCode = (name) => ((name || '').trim().split(/\s+/)[0] || '').replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase();
+// Suggest a project tag from what the project is about: the first real word after the client
+// in the name ("Dabur Amla Bihar" → AMLA), else the first word of the details
+const TAG_SKIP_WORDS = new Set(['THE', 'AND', 'FOR', 'OF', 'PROJECT', 'AD', 'AN', 'SMR', 'CGI', 'MV', 'CRP', 'PHO', 'OTH']);
+const suggestProjectTag = (name, details) => {
+  const pick = (words) => words
+    .map(w => w.replace(/[^A-Za-z0-9]/g, '').toUpperCase())
+    .find(w => w.length >= 2 && /^[A-Z]/.test(w) && !TAG_SKIP_WORDS.has(w));
+  const fromName = pick((name || '').trim().split(/\s+/).slice(1));
+  return (fromName || pick((details || '').trim().split(/\s+/)) || '').slice(0, 6);
+};
+const TAG_RE = /^[A-Z][A-Z0-9]{1,5}$/;
 
 // New workflow: PND → VRF → OWN → FIN → DSB
 const STATUS_FLOW = ['PND', 'OWN', 'FIN', 'DSB'];
@@ -80,6 +91,8 @@ const FinanceReview = () => {
   const [newProjectCode, setNewProjectCode] = useState(''); // shown read-only (preview, or the saved code while editing)
   const [newClientCode, setNewClientCode] = useState('');
   const [clientCodeTouched, setClientCodeTouched] = useState(false);
+  const [newProjectTag, setNewProjectTag] = useState('');
+  const [projectTagTouched, setProjectTagTouched] = useState(false);
   const [newProjectType, setNewProjectType] = useState('AD');
   const [newStartDate, setNewStartDate] = useState(todayLocal());
   const [projectTypes, setProjectTypes] = useState([]);
@@ -138,21 +151,26 @@ const FinanceReview = () => {
     if (!clientCodeTouched && !editingProjectId) setNewClientCode(suggestClientCode(newProjectName));
   }, [newProjectName, clientCodeTouched, editingProjectId]);
 
+  // Project tag follows the name/details until the user types their own
+  useEffect(() => {
+    if (!projectTagTouched && !editingProjectId) setNewProjectTag(suggestProjectTag(newProjectName, newProjectDetails));
+  }, [newProjectName, newProjectDetails, projectTagTouched, editingProjectId]);
+
   // Live preview of the code the new project will get
   useEffect(() => {
     if (editingProjectId) return;
-    if (!/^[A-Z]{2,5}$/.test(newClientCode) || !newProjectType || !newStartDate) { setNewProjectCode(''); return; }
+    if (!/^[A-Z]{2,5}$/.test(newClientCode) || !TAG_RE.test(newProjectTag) || !newProjectType || !newStartDate) { setNewProjectCode(''); return; }
     let cancelled = false;
     const t = setTimeout(async () => {
       try {
-        const q = new URLSearchParams({ clientCode: newClientCode, type: newProjectType, startDate: newStartDate });
+        const q = new URLSearchParams({ clientCode: newClientCode, projectTag: newProjectTag, type: newProjectType, startDate: newStartDate });
         const res = await apiFetch(`/api/projects/next-code?${q}`);
         const data = await res.json();
         if (!cancelled) setNewProjectCode(res.ok ? data.code : '');
       } catch (e) { if (!cancelled) setNewProjectCode(''); }
     }, 300);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [newClientCode, newProjectType, newStartDate, editingProjectId, projects]); // eslint-disable-line
+  }, [newClientCode, newProjectTag, newProjectType, newStartDate, editingProjectId, projects]); // eslint-disable-line
 
   // Fetch comments when selected request changes
   useEffect(() => {
@@ -223,6 +241,10 @@ const FinanceReview = () => {
       setProjectError('Client code must be 2 to 5 letters (A-Z).');
       return;
     }
+    if (!editingProjectId && !TAG_RE.test(newProjectTag)) {
+      setProjectError('Project tag must be 2 to 6 letters or digits, starting with a letter (e.g. AMLA).');
+      return;
+    }
     setProjectLoading(true);
     setProjectSuccess('');
     setProjectError('');
@@ -235,7 +257,7 @@ const FinanceReview = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(editingProjectId
           ? { name: newProjectName, details: newProjectDetails, partnerName: newPartnerName, partnerPhone: newPartnerPhone }
-          : { name: newProjectName, clientCode: newClientCode, type: newProjectType, startDate: newStartDate, details: newProjectDetails, partnerName: newPartnerName, partnerPhone: newPartnerPhone })
+          : { name: newProjectName, clientCode: newClientCode, projectTag: newProjectTag, type: newProjectType, startDate: newStartDate, details: newProjectDetails, partnerName: newPartnerName, partnerPhone: newPartnerPhone })
       });
       if (res.ok) {
         const data = await res.json();
@@ -246,6 +268,8 @@ const FinanceReview = () => {
         setNewPartnerPhone('');
         setNewClientCode('');
         setClientCodeTouched(false);
+        setNewProjectTag('');
+        setProjectTagTouched(false);
         setNewStartDate(todayLocal());
         setEditingProjectId(null);
         setProjectSuccess(editingProjectId ? `Project "${data.name}" successfully updated!` : `Project "${data.name}" created with code ${data.code}`);
@@ -268,7 +292,9 @@ const FinanceReview = () => {
     setNewProjectDetails(p.details || '');
     setNewPartnerName(p.partner_name || '');
     setNewPartnerPhone(p.partner_phone || '');
-    setNewClientCode((p.code || '').split('_')[0] || '');
+    const parts = (p.code || '').split('_');
+    setNewClientCode(parts[0] || '');
+    setNewProjectTag(parts.length === 6 ? parts[1] : ''); // older codes have no tag
     if (p.project_type) setNewProjectType(p.project_type);
     if (p.start_date) setNewStartDate(p.start_date);
   };
@@ -279,6 +305,8 @@ const FinanceReview = () => {
     setNewProjectCode('');
     setNewClientCode('');
     setClientCodeTouched(false);
+    setNewProjectTag('');
+    setProjectTagTouched(false);
     setNewProjectType('AD');
     setNewStartDate(todayLocal());
     setNewProjectDetails('');
@@ -339,7 +367,12 @@ const FinanceReview = () => {
               <TextField
                 label="Client Code" value={newClientCode} required disabled={!!editingProjectId}
                 onChange={e => { setClientCodeTouched(true); setNewClientCode(e.target.value.replace(/[^A-Za-z]/g, '').slice(0, 5).toUpperCase()); }}
-                helperText={editingProjectId ? ' ' : '2-5 letters, e.g. DAB for Dabur'} sx={{ width: 170 }}
+                helperText={editingProjectId ? ' ' : '2-5 letters, e.g. DAB for Dabur'} sx={{ width: 160 }}
+              />
+              <TextField
+                label="Project Tag" value={newProjectTag} required disabled={!!editingProjectId}
+                onChange={e => { setProjectTagTouched(true); setNewProjectTag(e.target.value.replace(/[^A-Za-z0-9]/g, '').slice(0, 6).toUpperCase()); }}
+                helperText={editingProjectId ? ' ' : 'Product / campaign, e.g. AMLA'} sx={{ width: 170 }}
               />
               <TextField
                 select label="Project Type" value={newProjectType} required disabled={!!editingProjectId}
@@ -355,7 +388,7 @@ const FinanceReview = () => {
                 label="Project Code" value={newProjectCode} placeholder="Fill the fields to generate"
                 InputProps={{ readOnly: true }} InputLabelProps={{ shrink: true }}
                 helperText={editingProjectId ? 'Codes cannot be changed after creation' : 'Auto-generated, unique'}
-                sx={{ minWidth: 280, '& input': { fontFamily: 'monospace', fontWeight: 700 } }}
+                sx={{ minWidth: 330, '& input': { fontFamily: 'monospace', fontWeight: 700 } }}
               />
             </Box>
             <Box sx={{ display: 'flex', gap: 2, mb: 2, flexWrap: 'wrap' }}>
