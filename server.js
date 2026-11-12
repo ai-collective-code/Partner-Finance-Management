@@ -331,6 +331,8 @@ async function initPostgres(pgConfig) {
   // Add columns if table already exists (migration)
   await pool.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS partner_name TEXT`).catch(() => {});
   await pool.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS partner_phone TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS project_type TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS start_date TEXT`).catch(() => {});
 
   await pool.query(`CREATE TABLE IF NOT EXISTS attachments (
     id TEXT PRIMARY KEY,
@@ -534,6 +536,8 @@ function initSQLite() {
       // Migration: add columns if table already exists
       sqliteDb.run(`ALTER TABLE projects ADD COLUMN partner_name TEXT`, () => {});
       sqliteDb.run(`ALTER TABLE projects ADD COLUMN partner_phone TEXT`, () => {});
+      sqliteDb.run(`ALTER TABLE projects ADD COLUMN project_type TEXT`, () => {});
+      sqliteDb.run(`ALTER TABLE projects ADD COLUMN start_date TEXT`, () => {});
 
       sqliteDb.run(`CREATE TABLE IF NOT EXISTS attachments (
         id TEXT PRIMARY KEY,
@@ -1079,83 +1083,110 @@ app.get('/api/projects', authenticateToken, (req, res, next) => {
 // In-memory OTP store { phone: { otp, expiresAt, projectCode } }
 const otpStore = new Map();
 
-app.post('/api/projects', authenticateToken, requireRole('FIN', 'ADM', 'OWN'), (req, res, next) => {
-  const { name, code, details, partnerName, partnerPhone } = req.body;
-  if (!name || !code) return res.status(400).json({ error: 'Name and Code are required' });
-  
-  const ts = new Date().toISOString();
-  
-  const checkSql = "SELECT id FROM projects WHERE code = ?";
-  
-  const handleInsert = () => {
-    const id = 'PRJ-' + crypto.randomUUID().split('-')[0].toUpperCase();
-    const insertSql = "INSERT INTO projects (id, name, code, details, partner_name, partner_phone, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
-    if (isPostgres) {
-      pool.query(pgSql(insertSql), [id, name, code, details, partnerName || null, partnerPhone || null, 'Active', ts], (err) => {
-        if (err) return next(err);
-        res.json({ id, name, code, details, partner_name: partnerName, partner_phone: partnerPhone, status: 'Active' });
-      });
-    } else {
-      sqliteDb.run(insertSql, [id, name, code, details, partnerName || null, partnerPhone || null, 'Active', ts], (err) => {
-        if (err) return next(err);
-        res.json({ id, name, code, details, partner_name: partnerName, partner_phone: partnerPhone, status: 'Active' });
-      });
-    }
-  };
+// ── Auto-generated project codes ──
+// Format: <CLIENT>_<TYPE>_<DDMMMYY>_AiC_<NNN>   e.g. DAB_AD_12NOV26_AiC_010
+//   CLIENT   2-5 letter client/brand code
+//   TYPE     project type (PROJECT_TYPES)
+//   DDMMMYY  project start date
+//   NNN      running number across every project ever created, so no two codes repeat
+const PROJECT_TYPES = {
+  AD: 'Ad Film',
+  AN: 'Animatics',
+  SMR: 'Social Media Retainer',
+  CGI: 'CGI / VFX',
+  MV: 'Music Video',
+  CRP: 'Corporate Film',
+  PHO: 'Photo Shoot',
+  OTH: 'Other',
+};
+const CODE_MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
 
-  const handleUpdate = (existingId) => {
-    const updateSql = "UPDATE projects SET name = ?, details = ?, partner_name = ?, partner_phone = ?, status = 'Active', completed_at = NULL WHERE id = ?";
-    if (isPostgres) {
-      pool.query(pgSql(updateSql), [name, details, partnerName || null, partnerPhone || null, existingId], (err) => {
-        if (err) return next(err);
-        res.json({ id: existingId, name, code, details, partner_name: partnerName, partner_phone: partnerPhone, status: 'Active' });
-      });
-    } else {
-      sqliteDb.run(updateSql, [name, details, partnerName || null, partnerPhone || null, existingId], (err) => {
-        if (err) return next(err);
-        res.json({ id: existingId, name, code, details, partner_name: partnerName, partner_phone: partnerPhone, status: 'Active' });
-      });
-    }
-  };
-
-  if (isPostgres) {
-    pool.query(pgSql(checkSql), [code], (err, result) => {
-      if (err) return next(err);
-      if (result.rows && result.rows.length > 0) {
-        handleUpdate(result.rows[0].id);
-      } else {
-        handleInsert();
-      }
-    });
-  } else {
-    sqliteDb.get(checkSql, [code], (err, row) => {
-      if (err) return next(err);
-      if (row) {
-        handleUpdate(row.id);
-      } else {
-        handleInsert();
-      }
-    });
+function projectCodePrefix({ clientCode, type, startDate }) {
+  const client = String(clientCode || '').trim().toUpperCase();
+  const t = String(type || '').trim().toUpperCase();
+  if (!/^[A-Z]{2,5}$/.test(client)) return { error: 'Client code must be 2 to 5 letters (A-Z).' };
+  if (!PROJECT_TYPES[t]) return { error: `Project type must be one of: ${Object.keys(PROJECT_TYPES).join(', ')}.` };
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(startDate || ''));
+  if (!m) return { error: 'Start date must be in YYYY-MM-DD format.' };
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) {
+    return { error: 'Start date is not a valid date.' };
   }
+  const datePart = String(d).padStart(2, '0') + CODE_MONTHS[mo - 1] + String(y % 100).padStart(2, '0');
+  return { prefix: `${client}_${t}_${datePart}_AiC_`, type: t, startDate: m[0] };
+}
+
+const dbAllAsync = (sql, params = []) => new Promise((resolve, reject) =>
+  db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows || []))));
+const dbRunAsync = (sql, params = []) => new Promise((resolve, reject) =>
+  db.run(sql, params, (err) => (err ? reject(err) : resolve())));
+
+// Projects are never deleted (only marked Completed), so max + 1 never reuses a number.
+async function nextProjectSeq() {
+  const rows = await dbAllAsync('SELECT code FROM projects');
+  let max = 0;
+  for (const { code } of rows) {
+    const m = /_AiC_(\d+)$/i.exec(code || '');
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  }
+  return max + 1;
+}
+const formatSeq = (n) => String(n).padStart(3, '0');
+
+app.get('/api/projects/types', authenticateToken, (req, res) => {
+  res.json(Object.entries(PROJECT_TYPES).map(([code, label]) => ({ code, label })));
 });
 
+// Preview of the code the next project would get (the number is only reserved on create).
+app.get('/api/projects/next-code', authenticateToken, requireRole('FIN', 'ADM', 'OWN'), async (req, res, next) => {
+  try {
+    const p = projectCodePrefix(req.query);
+    if (p.error) return res.status(400).json({ error: p.error });
+    res.json({ code: p.prefix + formatSeq(await nextProjectSeq()) });
+  } catch (err) { next(err); }
+});
+
+app.post('/api/projects', authenticateToken, requireRole('FIN', 'ADM', 'OWN'), async (req, res, next) => {
+  const { name, details, partnerName, partnerPhone, clientCode, type, startDate } = req.body;
+  if (!name || !String(name).trim()) return res.status(400).json({ error: 'Project name is required' });
+  const p = projectCodePrefix({ clientCode, type, startDate });
+  if (p.error) return res.status(400).json({ error: p.error });
+
+  try {
+    // Retry if two people create a project at the same moment and pick the same number
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const code = p.prefix + formatSeq(await nextProjectSeq());
+      const id = 'PRJ-' + crypto.randomUUID().split('-')[0].toUpperCase();
+      try {
+        await dbRunAsync(
+          'INSERT INTO projects (id, name, code, details, partner_name, partner_phone, project_type, start_date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [id, name.trim(), code, details || null, partnerName || null, partnerPhone || null, p.type, p.startDate, 'Active', new Date().toISOString()]
+        );
+        return res.json({ id, name: name.trim(), code, details, partner_name: partnerName, partner_phone: partnerPhone, project_type: p.type, start_date: p.startDate, status: 'Active' });
+      } catch (err) {
+        if (!/unique|duplicate/i.test(err.message || '')) throw err;
+      }
+    }
+    res.status(409).json({ error: 'Could not reserve a unique project code. Please try again.' });
+  } catch (err) { next(err); }
+});
+
+// The code is fixed once created (requests refer to it), so editing only changes the other fields.
 app.put('/api/projects/:id', authenticateToken, requireRole('FIN', 'ADM', 'OWN'), (req, res, next) => {
   const { id } = req.params;
-  const { name, code, details, partnerName, partnerPhone } = req.body;
-  if (!name || !code) return res.status(400).json({ error: 'Name and Code are required' });
+  const { name, details, partnerName, partnerPhone } = req.body;
+  if (!name || !String(name).trim()) return res.status(400).json({ error: 'Project name is required' });
 
-  const sql = "UPDATE projects SET name = ?, code = ?, details = ?, partner_name = ?, partner_phone = ? WHERE id = ?";
-  if (isPostgres) {
-    pool.query(pgSql(sql), [name, code, details || null, partnerName || null, partnerPhone || null, id], (err) => {
-      if (err) return next(err);
-      res.json({ id, name, code, details, partner_name: partnerName, partner_phone: partnerPhone });
-    });
-  } else {
-    sqliteDb.run(sql, [name, code, details || null, partnerName || null, partnerPhone || null, id], (err) => {
-      if (err) return next(err);
-      res.json({ id, name, code, details, partner_name: partnerName, partner_phone: partnerPhone });
-    });
-  }
+  db.get('SELECT code FROM projects WHERE id = ?', [id], (err, row) => {
+    if (err) return next(err);
+    if (!row) return res.status(404).json({ error: 'Project not found' });
+    db.run('UPDATE projects SET name = ?, details = ?, partner_name = ?, partner_phone = ? WHERE id = ?',
+      [name.trim(), details || null, partnerName || null, partnerPhone || null, id], (err2) => {
+        if (err2) return next(err2);
+        res.json({ id, name: name.trim(), code: row.code, details, partner_name: partnerName, partner_phone: partnerPhone });
+      });
+  });
 });
 
 // ══════════ OTP VERIFICATION FOR PARTNER PROJECTS ══════════
