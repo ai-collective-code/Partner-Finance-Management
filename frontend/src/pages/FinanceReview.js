@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Box, Typography, Paper, Table, TableHead, TableRow, TableCell, TableBody,
   Chip, Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField,
-  Stepper, Step, StepLabel, Alert, CircularProgress, Divider, Avatar, Tooltip, Grid
+  Stepper, Step, StepLabel, Alert, CircularProgress, Divider, Avatar, Tooltip, Grid, MenuItem
 } from '@mui/material';
 import {
   AccountBalance, CheckCircle, Cancel, Send, Visibility,
@@ -12,6 +12,14 @@ import {
 import { useApi } from '../hooks/useApi';
 import { useSelector } from 'react-redux';
 import AuthedFile from '../components/AuthedFile';
+
+// Today's date as YYYY-MM-DD in the user's local time zone
+const todayLocal = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+// Suggest a client code from the project name: first 3 letters of the first word ("Dabur AD Oil" → DAB)
+const suggestClientCode = (name) => ((name || '').trim().split(/\s+/)[0] || '').replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase();
 
 // New workflow: PND → VRF → OWN → FIN → DSB
 const STATUS_FLOW = ['PND', 'OWN', 'FIN', 'DSB'];
@@ -69,7 +77,12 @@ const FinanceReview = () => {
   // Projects State
   const [projects, setProjects] = useState([]);
   const [newProjectName, setNewProjectName] = useState('');
-  const [newProjectCode, setNewProjectCode] = useState('');
+  const [newProjectCode, setNewProjectCode] = useState(''); // shown read-only (preview, or the saved code while editing)
+  const [newClientCode, setNewClientCode] = useState('');
+  const [clientCodeTouched, setClientCodeTouched] = useState(false);
+  const [newProjectType, setNewProjectType] = useState('AD');
+  const [newStartDate, setNewStartDate] = useState(todayLocal());
+  const [projectTypes, setProjectTypes] = useState([]);
   const [newProjectDetails, setNewProjectDetails] = useState('');
   const [newPartnerName, setNewPartnerName] = useState('');
   const [newPartnerPhone, setNewPartnerPhone] = useState('');
@@ -108,10 +121,38 @@ const FinanceReview = () => {
     } catch (e) { console.error(e); }
   };
 
-  useEffect(() => { 
-    fetchRequests(); 
-    if (user?.role === 'FIN' || user?.role === 'ADM') fetchProjects();
+  const fetchProjectTypes = async () => {
+    try {
+      const res = await apiFetch('/api/projects/types');
+      if (res.ok) setProjectTypes(await res.json());
+    } catch (e) { console.error(e); }
+  };
+
+  useEffect(() => {
+    fetchRequests();
+    if (user?.role === 'FIN' || user?.role === 'ADM') { fetchProjects(); fetchProjectTypes(); }
   }, [user]); // eslint-disable-line
+
+  // Client code follows the project name until the user types their own
+  useEffect(() => {
+    if (!clientCodeTouched && !editingProjectId) setNewClientCode(suggestClientCode(newProjectName));
+  }, [newProjectName, clientCodeTouched, editingProjectId]);
+
+  // Live preview of the code the new project will get
+  useEffect(() => {
+    if (editingProjectId) return;
+    if (!/^[A-Z]{2,5}$/.test(newClientCode) || !newProjectType || !newStartDate) { setNewProjectCode(''); return; }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const q = new URLSearchParams({ clientCode: newClientCode, type: newProjectType, startDate: newStartDate });
+        const res = await apiFetch(`/api/projects/next-code?${q}`);
+        const data = await res.json();
+        if (!cancelled) setNewProjectCode(res.ok ? data.code : '');
+      } catch (e) { if (!cancelled) setNewProjectCode(''); }
+    }, 300);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [newClientCode, newProjectType, newStartDate, editingProjectId, projects]); // eslint-disable-line
 
   // Fetch comments when selected request changes
   useEffect(() => {
@@ -177,7 +218,11 @@ const FinanceReview = () => {
 
   const handleCreateProject = async (e) => {
     e.preventDefault();
-    if (!newProjectName || !newProjectCode) return;
+    if (!newProjectName.trim()) return;
+    if (!editingProjectId && !/^[A-Z]{2,5}$/.test(newClientCode)) {
+      setProjectError('Client code must be 2 to 5 letters (A-Z).');
+      return;
+    }
     setProjectLoading(true);
     setProjectSuccess('');
     setProjectError('');
@@ -188,7 +233,9 @@ const FinanceReview = () => {
       const res = await apiFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newProjectName, code: newProjectCode, details: newProjectDetails, partnerName: newPartnerName, partnerPhone: newPartnerPhone })
+        body: JSON.stringify(editingProjectId
+          ? { name: newProjectName, details: newProjectDetails, partnerName: newPartnerName, partnerPhone: newPartnerPhone }
+          : { name: newProjectName, clientCode: newClientCode, type: newProjectType, startDate: newStartDate, details: newProjectDetails, partnerName: newPartnerName, partnerPhone: newPartnerPhone })
       });
       if (res.ok) {
         const data = await res.json();
@@ -197,8 +244,11 @@ const FinanceReview = () => {
         setNewProjectDetails('');
         setNewPartnerName('');
         setNewPartnerPhone('');
+        setNewClientCode('');
+        setClientCodeTouched(false);
+        setNewStartDate(todayLocal());
         setEditingProjectId(null);
-        setProjectSuccess(editingProjectId ? `Project "${data.name}" successfully updated!` : `Project "${data.name}" successfully saved!`);
+        setProjectSuccess(editingProjectId ? `Project "${data.name}" successfully updated!` : `Project "${data.name}" created with code ${data.code}`);
         fetchProjects();
       } else {
         const err = await res.json();
@@ -218,12 +268,19 @@ const FinanceReview = () => {
     setNewProjectDetails(p.details || '');
     setNewPartnerName(p.partner_name || '');
     setNewPartnerPhone(p.partner_phone || '');
+    setNewClientCode((p.code || '').split('_')[0] || '');
+    if (p.project_type) setNewProjectType(p.project_type);
+    if (p.start_date) setNewStartDate(p.start_date);
   };
 
   const handleCancelEditProject = () => {
     setEditingProjectId(null);
     setNewProjectName('');
     setNewProjectCode('');
+    setNewClientCode('');
+    setClientCodeTouched(false);
+    setNewProjectType('AD');
+    setNewStartDate(todayLocal());
     setNewProjectDetails('');
     setNewPartnerName('');
     setNewPartnerPhone('');
@@ -279,13 +336,35 @@ const FinanceReview = () => {
           <Box component="form" onSubmit={handleCreateProject} sx={{ mb: 2 }}>
             <Box sx={{ display: 'flex', gap: 2, mb: 2, flexWrap: 'wrap' }}>
               <TextField label="Project Name" value={newProjectName} onChange={e => setNewProjectName(e.target.value)} required />
-              <TextField label="Project Code" value={newProjectCode} onChange={e => setNewProjectCode(e.target.value)} required />
+              <TextField
+                label="Client Code" value={newClientCode} required disabled={!!editingProjectId}
+                onChange={e => { setClientCodeTouched(true); setNewClientCode(e.target.value.replace(/[^A-Za-z]/g, '').slice(0, 5).toUpperCase()); }}
+                helperText={editingProjectId ? ' ' : '2-5 letters, e.g. DAB for Dabur'} sx={{ width: 170 }}
+              />
+              <TextField
+                select label="Project Type" value={newProjectType} required disabled={!!editingProjectId}
+                onChange={e => setNewProjectType(e.target.value)} helperText=" " sx={{ width: 220 }}
+              >
+                {projectTypes.map(t => <MenuItem key={t.code} value={t.code}>{t.code} – {t.label}</MenuItem>)}
+              </TextField>
+              <TextField
+                type="date" label="Start Date" value={newStartDate} required disabled={!!editingProjectId}
+                onChange={e => setNewStartDate(e.target.value)} InputLabelProps={{ shrink: true }} helperText=" " sx={{ width: 180 }}
+              />
+              <TextField
+                label="Project Code" value={newProjectCode} placeholder="Fill the fields to generate"
+                InputProps={{ readOnly: true }} InputLabelProps={{ shrink: true }}
+                helperText={editingProjectId ? 'Codes cannot be changed after creation' : 'Auto-generated, unique'}
+                sx={{ minWidth: 280, '& input': { fontFamily: 'monospace', fontWeight: 700 } }}
+              />
+            </Box>
+            <Box sx={{ display: 'flex', gap: 2, mb: 2, flexWrap: 'wrap' }}>
               <TextField label="Details" value={newProjectDetails} onChange={e => setNewProjectDetails(e.target.value)} sx={{ flexGrow: 1 }} />
             </Box>
             <Box sx={{ display: 'flex', gap: 2, mb: 2, flexWrap: 'wrap', alignItems: 'center' }}>
               <TextField label="Partner Name" value={newPartnerName} onChange={e => setNewPartnerName(e.target.value)} placeholder="Authorized partner name" />
               <TextField label="Partner Phone" value={newPartnerPhone} onChange={e => setNewPartnerPhone(e.target.value)} placeholder="+91 XXXXXXXXXX" />
-              <Button type="submit" variant="contained" color={editingProjectId ? "secondary" : "primary"} disabled={projectLoading}>
+              <Button type="submit" variant="contained" color={editingProjectId ? "secondary" : "primary"} disabled={projectLoading || (!editingProjectId && !newProjectCode)}>
                 {editingProjectId ? 'Save Changes' : 'Create Project'}
               </Button>
               {editingProjectId && (
@@ -300,16 +379,23 @@ const FinanceReview = () => {
           </Typography>
           <Typography variant="h6" mb={2}>Active Projects</Typography>
           <Table>
-            <TableHead><TableRow><TableCell>Name</TableCell><TableCell>Code</TableCell><TableCell>Partner</TableCell><TableCell>Phone</TableCell><TableCell>Details</TableCell><TableCell>Created</TableCell><TableCell>Action</TableCell></TableRow></TableHead>
+            <TableHead><TableRow><TableCell>Name</TableCell><TableCell>Code</TableCell><TableCell>Partner</TableCell><TableCell>Phone</TableCell><TableCell>Details</TableCell><TableCell>Start</TableCell><TableCell>Action</TableCell></TableRow></TableHead>
             <TableBody>
               {projects.map(p => (
                 <TableRow key={p.id}>
                   <TableCell><strong>{p.name}</strong></TableCell>
-                  <TableCell><Chip label={p.code} size="small" /></TableCell>
+                  <TableCell>
+                    <Chip label={p.code} size="small" sx={{ fontFamily: 'monospace' }} />
+                    {p.project_type && (
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                        {(projectTypes.find(t => t.code === p.project_type) || {}).label || p.project_type}
+                      </Typography>
+                    )}
+                  </TableCell>
                   <TableCell>{p.partner_name || <Typography variant="caption" color="text.disabled">Not set</Typography>}</TableCell>
                   <TableCell>{p.partner_phone || <Typography variant="caption" color="text.disabled">Not set</Typography>}</TableCell>
                   <TableCell>{p.details}</TableCell>
-                  <TableCell>{new Date(p.created_at).toLocaleDateString()}</TableCell>
+                  <TableCell>{p.start_date ? new Date(p.start_date + 'T00:00:00').toLocaleDateString() : new Date(p.created_at).toLocaleDateString()}</TableCell>
                   <TableCell>
                     <Box sx={{ display: 'flex', gap: 1 }}>
                       <Button size="small" variant="outlined" color="primary" onClick={() => handleStartEditProject(p)}>Edit</Button>
