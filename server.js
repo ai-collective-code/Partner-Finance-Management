@@ -1084,8 +1084,10 @@ app.get('/api/projects', authenticateToken, (req, res, next) => {
 const otpStore = new Map();
 
 // ── Auto-generated project codes ──
-// Format: <CLIENT>_<TYPE>_<DDMMMYY>_AiC_<NNN>   e.g. DAB_AD_12NOV26_AiC_010
+// Format: <CLIENT>_<TAG>_<TYPE>_<DDMMMYY>_AiC_<NNN>   e.g. DAB_AMLA_AD_12NOV26_AiC_010
 //   CLIENT   2-5 letter client/brand code
+//   TAG      2-6 letter/digit project tag (product, campaign or region), so two projects
+//            for the same client on the same day are told apart by more than the number
 //   TYPE     project type (PROJECT_TYPES)
 //   DDMMMYY  project start date
 //   NNN      running number across every project ever created, so no two codes repeat
@@ -1101,10 +1103,12 @@ const PROJECT_TYPES = {
 };
 const CODE_MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
 
-function projectCodePrefix({ clientCode, type, startDate }) {
+function projectCodePrefix({ clientCode, projectTag, type, startDate }) {
   const client = String(clientCode || '').trim().toUpperCase();
+  const tag = String(projectTag || '').trim().toUpperCase();
   const t = String(type || '').trim().toUpperCase();
   if (!/^[A-Z]{2,5}$/.test(client)) return { error: 'Client code must be 2 to 5 letters (A-Z).' };
+  if (!/^[A-Z][A-Z0-9]{1,5}$/.test(tag)) return { error: 'Project tag must be 2 to 6 letters or digits, starting with a letter (e.g. AMLA).' };
   if (!PROJECT_TYPES[t]) return { error: `Project type must be one of: ${Object.keys(PROJECT_TYPES).join(', ')}.` };
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(startDate || ''));
   if (!m) return { error: 'Start date must be in YYYY-MM-DD format.' };
@@ -1114,7 +1118,7 @@ function projectCodePrefix({ clientCode, type, startDate }) {
     return { error: 'Start date is not a valid date.' };
   }
   const datePart = String(d).padStart(2, '0') + CODE_MONTHS[mo - 1] + String(y % 100).padStart(2, '0');
-  return { prefix: `${client}_${t}_${datePart}_AiC_`, type: t, startDate: m[0] };
+  return { prefix: `${client}_${tag}_${t}_${datePart}_AiC_`, type: t, startDate: m[0] };
 }
 
 const dbAllAsync = (sql, params = []) => new Promise((resolve, reject) =>
@@ -1148,9 +1152,9 @@ app.get('/api/projects/next-code', authenticateToken, requireRole('FIN', 'ADM', 
 });
 
 app.post('/api/projects', authenticateToken, requireRole('FIN', 'ADM', 'OWN'), async (req, res, next) => {
-  const { name, details, partnerName, partnerPhone, clientCode, type, startDate } = req.body;
+  const { name, details, partnerName, partnerPhone, clientCode, projectTag, type, startDate } = req.body;
   if (!name || !String(name).trim()) return res.status(400).json({ error: 'Project name is required' });
-  const p = projectCodePrefix({ clientCode, type, startDate });
+  const p = projectCodePrefix({ clientCode, projectTag, type, startDate });
   if (p.error) return res.status(400).json({ error: p.error });
 
   try {
