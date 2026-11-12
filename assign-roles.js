@@ -4,26 +4,34 @@
  * 
  * Usage: node assign-roles.js
  * 
- * Configure the ROLE_MAP below with your team's emails and desired roles:
+ * Reads the same team role map as the server: the EMAIL_ROLE_MAP env var (JSON) or the
+ * git-ignored roles.json file (see roles.example.json). Emails are deliberately not kept
+ * in this file because the repository is public.
  *   DEV = Developer (can submit requests)
- *   FIN = Finance (can review & process payments) 
+ *   FIN = Finance (can review & process payments)
  *   OWN = Owner/Founder (can approve requests)
  *   ADM = Admin (sees everything)
  */
 
 require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
 
 const CLERK_SECRET = process.env.CLERK_SECRET_KEY;
 
-// ═══════════════════════════════════════════════════════
-// 🎯 CONFIGURE YOUR TEAM ROLES HERE
-// ═══════════════════════════════════════════════════════
-const ROLE_MAP = {
-    'abakashray57@gmail.com': 'ADM',          // You - System Admin
-    'cse2022017@rcciit.org.in': 'OWN',        // Founder / Owner
-    'rayabakash@gmail.com': 'FIN',            // Finance
-};
-// ═══════════════════════════════════════════════════════
+function loadRoleMap() {
+    let raw = process.env.EMAIL_ROLE_MAP;
+    const rolesFile = path.join(__dirname, 'roles.json');
+    if (!raw && fs.existsSync(rolesFile)) raw = fs.readFileSync(rolesFile, 'utf8');
+    if (!raw) {
+        console.error('No EMAIL_ROLE_MAP env var or roles.json found. See roles.example.json.');
+        process.exit(1);
+    }
+    const parsed = JSON.parse(raw);
+    return Object.fromEntries(Object.entries(parsed).map(([email, entry]) => [email, entry.role]));
+}
+
+const ROLE_MAP = loadRoleMap();
 
 async function assignRoles() {
     console.log('\n🔐 Clerk Role Assignment Tool\n');

@@ -1,0 +1,6 @@
+{
+  "owner@example.com": { "role": "OWN", "name": "Owner Name" },
+  "finance@example.com": { "role": "FIN", "name": "Finance Name" },
+  "verifier@example.com": { "role": "VRF", "name": "Verifier Name" },
+  "admin@example.com": { "role": "ADM", "name": "Admin" }
+}
