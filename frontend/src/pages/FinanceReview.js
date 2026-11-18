@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import {
   Box, Typography, Paper, Table, TableHead, TableRow, TableCell, TableBody,
   Chip, Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField,
-  Stepper, Step, StepLabel, Alert, CircularProgress, Divider, Avatar, Tooltip, Grid, MenuItem
+  Stepper, Step, StepLabel, Alert, CircularProgress, Divider, Avatar, Tooltip, Grid, MenuItem,
+  Checkbox, FormControlLabel
 } from '@mui/material';
 import {
   AccountBalance, CheckCircle, Cancel, Send, Visibility,
@@ -103,6 +104,11 @@ const FinanceReview = () => {
   const [projectSuccess, setProjectSuccess] = useState('');
   const [projectError, setProjectError] = useState('');
   const [editingProjectId, setEditingProjectId] = useState(null);
+  // "Mark Completed" confirmation: the project being completed, the tick-box, and request state
+  const [completeTarget, setCompleteTarget] = useState(null);
+  const [completeConfirmed, setCompleteConfirmed] = useState(false);
+  const [completeLoading, setCompleteLoading] = useState(false);
+  const [completeError, setCompleteError] = useState('');
 
   // Comments history state
   const [comments, setComments] = useState([]);
@@ -314,11 +320,37 @@ const FinanceReview = () => {
     setNewPartnerPhone('');
   };
 
-  const handleCompleteProject = async (id) => {
+  const openCompleteDialog = (p) => {
+    setCompleteTarget(p);
+    setCompleteConfirmed(false);
+    setCompleteError('');
+  };
+
+  const closeCompleteDialog = () => {
+    if (completeLoading) return;
+    setCompleteTarget(null);
+  };
+
+  const handleCompleteProject = async () => {
+    if (!completeTarget || !completeConfirmed) return;
+    setCompleteLoading(true);
+    setCompleteError('');
     try {
-      await apiFetch(`/api/projects/${id}/complete`, { method: 'PUT' });
+      const res = await apiFetch(`/api/projects/${completeTarget.id}/complete`, { method: 'PUT' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setCompleteError(err.error || 'Could not mark the project as completed.');
+        return;
+      }
+      setProjectSuccess(`Project "${completeTarget.name}" (${completeTarget.code}) marked as completed.`);
+      setCompleteTarget(null);
       fetchProjects();
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      console.error(e);
+      setCompleteError('Network error occurred');
+    } finally {
+      setCompleteLoading(false);
+    }
   };
 
   const getVerifierInfo = (req) => {
@@ -432,7 +464,7 @@ const FinanceReview = () => {
                   <TableCell>
                     <Box sx={{ display: 'flex', gap: 1 }}>
                       <Button size="small" variant="outlined" color="primary" onClick={() => handleStartEditProject(p)}>Edit</Button>
-                      <Button size="small" color="success" onClick={() => handleCompleteProject(p.id)}>Mark Completed</Button>
+                      <Button size="small" color="success" onClick={() => openCompleteDialog(p)}>Mark Completed</Button>
                     </Box>
                   </TableCell>
                 </TableRow>
@@ -991,6 +1023,45 @@ const FinanceReview = () => {
         <DialogContent sx={{ p: 2, textAlign: 'center', backgroundColor: '#000', borderRadius: 2 }}>
           <Box component="img" src={fullImage} alt="Full Invoice" sx={{ maxWidth: '100%', maxHeight: '80vh', objectFit: 'contain' }} />
         </DialogContent>
+      </Dialog>
+
+      {/* Confirm before marking a project completed */}
+      <Dialog open={!!completeTarget} onClose={closeCompleteDialog} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
+        <DialogTitle sx={{ fontWeight: 700 }}>Is this project completed?</DialogTitle>
+        <DialogContent>
+          {completeTarget && (
+            <>
+              <Box sx={{ p: 2, mb: 2, borderRadius: 2, border: '1px solid', borderColor: 'divider' }}>
+                <Typography fontWeight={700}>{completeTarget.name}</Typography>
+                <Chip label={completeTarget.code} size="small" sx={{ mt: 1, fontFamily: 'monospace' }} />
+                {completeTarget.partner_name && (
+                  <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                    Partner: {completeTarget.partner_name}{completeTarget.partner_phone ? ` (${completeTarget.partner_phone})` : ''}
+                  </Typography>
+                )}
+              </Box>
+              <Alert severity="warning" sx={{ mb: 2 }}>
+                Once completed, this project leaves the Active Projects list and partners can no longer pick it when submitting invoices.
+                Only mark it completed when all work and payments for it are finished.
+              </Alert>
+              <FormControlLabel
+                control={<Checkbox checked={completeConfirmed} onChange={e => setCompleteConfirmed(e.target.checked)} color="success" />}
+                label={`Yes, I confirm ${completeTarget.code} is completed.`}
+              />
+              {completeError && <Alert severity="error" sx={{ mt: 2 }}>{completeError}</Alert>}
+            </>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ p: 2.5, gap: 1 }}>
+          <Button variant="outlined" color="inherit" onClick={closeCompleteDialog} disabled={completeLoading}>Cancel</Button>
+          <Button
+            variant="contained" color="success" onClick={handleCompleteProject}
+            disabled={!completeConfirmed || completeLoading}
+            startIcon={completeLoading ? <CircularProgress size={16} color="inherit" /> : <CheckCircle />}
+          >
+            Mark Completed
+          </Button>
+        </DialogActions>
       </Dialog>
     </Box>
   );
