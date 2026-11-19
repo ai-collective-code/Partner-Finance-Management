@@ -6,12 +6,13 @@ import {
   Tooltip, IconButton, Autocomplete, Dialog, DialogTitle, DialogContent, DialogActions
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
+import { useSelector } from 'react-redux';
 import { useApi } from '../hooks/useApi';
 import { generateInvoicePdf } from '../utils/generateInvoicePdf';
 import AuthedFile from '../components/AuthedFile';
 import {
   CheckCircle, Cancel, Palette,
-  AutoAwesome, PlayForWork, VerifiedUser, HelpOutline, TaskAlt
+  AutoAwesome, PlayForWork, VerifiedUser, HelpOutline, TaskAlt, Lock
 } from '@mui/icons-material';
 
 const STATES = [
@@ -275,10 +276,14 @@ const SubmitRequest = () => {
   
   // OTP Verification Disabled
 
-  // An invoice document is only mandatory on this partner's very first submission —
-  // after that it's optional (they can still generate/attach one via the button below).
-  const [isFirstSubmission, setIsFirstSubmission] = useState(true);
-  const [checkingHistory, setCheckingHistory] = useState(true);
+  // Partners: the first project picked after logging in is locked for that login (the server
+  // holds the lock, so a refresh or a second tab can't change it). Logging out clears it.
+  const { user } = useSelector((state) => state.auth);
+  const isPartner = user?.role === 'VND';
+  const [lockedProject, setLockedProject] = useState(null);
+  const [pendingLockProject, setPendingLockProject] = useState(null); // awaiting confirmation
+  const [lockingProject, setLockingProject] = useState(false);
+  const [checkingLock, setCheckingLock] = useState(isPartner);
 
   useEffect(() => {
     const fetchProj = async () => {
@@ -295,22 +300,56 @@ const SubmitRequest = () => {
     fetchProj();
   }, [apiFetch]);
 
+  // Fill the project fields from a chosen project (partner-name check + phone auto-fill)
+  const applyProject = (project) => {
+    setSelectedProject(project);
+    setProjectName(project.code ? `${project.name} (${project.code})` : project.name);
+    setPartnerNameMismatch(!!project.partner_name &&
+      vendorName.trim().toLowerCase() !== project.partner_name.trim().toLowerCase());
+    if (project.partner_phone) setPhone(project.partner_phone);
+  };
+
+  const applyLock = (project) => {
+    setLockedProject(project);
+    applyProject(project);
+  };
+
   useEffect(() => {
-    const checkHistory = async () => {
+    if (!isPartner) return;
+    const loadLock = async () => {
       try {
-        const res = await apiFetch('/api/requests?limit=1');
+        const res = await apiFetch('/api/partner/project-lock');
         if (res.ok) {
           const data = await res.json();
-          setIsFirstSubmission((data.pagination?.total || 0) === 0);
+          if (data.project) applyLock(data.project);
         }
       } catch (e) {
-        console.error('Failed to check submission history', e);
+        console.error('Failed to load project lock', e);
       } finally {
-        setCheckingHistory(false);
+        setCheckingLock(false);
       }
     };
-    checkHistory();
-  }, [apiFetch]);
+    loadLock();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiFetch, isPartner]);
+
+  const confirmProjectLock = async () => {
+    const project = pendingLockProject;
+    setPendingLockProject(null);
+    if (!project) return;
+    setLockingProject(true);
+    setError(null);
+    try {
+      const res = await apiFetch('/api/partner/project-lock', { method: 'POST', body: { projectId: project.id } });
+      const data = await res.json();
+      if (data.project) applyLock(data.project);
+      if (!res.ok) setError(data.error || 'Could not lock the project.');
+    } catch {
+      setError('Network error. Could not lock the project.');
+    } finally {
+      setLockingProject(false);
+    }
+  };
 
   // When partner selects a project, validate partner name
   const handleProjectSelect = (event, newInputValue) => {
@@ -562,7 +601,8 @@ const SubmitRequest = () => {
     e.preventDefault();
     
     const missingFields = [];
-    if (isFirstSubmission && !fileHash) missingFields.push('Partner Invoice File (Step 1) — required for your first submission; upload one or use "Generate Invoice" below');
+    if (!fileHash) missingFields.push('Partner Invoice (Step 1): upload your invoice or use "Generate Invoice from Details" below');
+    if (isPartner && !lockedProject) missingFields.push('Project: select your project from the list');
     if (!vendorName.trim()) missingFields.push('Partner Name');
     if (!companyName.trim()) missingFields.push('Company Name');
     if (!phone.trim()) missingFields.push('Phone Number');
@@ -654,13 +694,11 @@ const SubmitRequest = () => {
           
           {/* ── STEP 1: UPLOAD INVOICE ── */}
           <Typography variant="h6" color="primary" mb={1}>
-            1. Upload Partner Invoice (AI OCR) {isFirstSubmission ? '★ Required (first submission)' : '(Optional)'}
+            1. Upload Partner Invoice (AI OCR) ★ Required
           </Typography>
-          {!isFirstSubmission && (
-            <Typography variant="caption" color="text.secondary" display="block" mb={1}>
-              You've submitted before, so an invoice document isn't required this time — but you can still attach one, or use "Generate Invoice from Details" near the bottom of the form.
-            </Typography>
-          )}
+          <Typography variant="caption" color="text.secondary" display="block" mb={1}>
+            Every submission needs an invoice. Upload yours here, or fill in the form and use "Generate Invoice from Details" near the bottom. You can't submit without one.
+          </Typography>
           <Box sx={{ mb: 4, p: 3, border: '1px dashed rgba(99,102,241,0.5)', borderRadius: 2, bgcolor: 'rgba(99,102,241,0.05)' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, flexWrap: 'wrap', gap: 1.5 }}>
               {!fileHash ? (
@@ -887,15 +925,35 @@ const SubmitRequest = () => {
           </Box>
           <Grid container spacing={3} mb={2}>
             <Grid item xs={12} sm={6}>
-              <Autocomplete
-                freeSolo
-                options={activeProjects.map((option) => option.code ? `${option.name} (${option.code})` : option.name)}
-                value={projectName}
-                onInputChange={handleProjectSelect}
-                renderInput={(params) => (
-                  <TextField {...params} label="Project Name" required fullWidth />
-                )}
-              />
+              {isPartner && lockedProject ? (
+                <TextField
+                  fullWidth required label="Project Name (locked)" value={projectName}
+                  InputProps={{ readOnly: true, startAdornment: <InputAdornment position="start"><Lock fontSize="small" color="action" /></InputAdornment> }}
+                  helperText="Locked for this login. Log out and log in again to submit for a different project."
+                />
+              ) : isPartner ? (
+                <Autocomplete
+                  options={activeProjects}
+                  getOptionLabel={(p) => (p.code ? `${p.name} (${p.code})` : p.name)}
+                  value={null}
+                  onChange={(e, p) => { if (p) setPendingLockProject(p); }}
+                  disabled={checkingLock || lockingProject}
+                  renderInput={(params) => (
+                    <TextField {...params} label="Project Name" required fullWidth
+                      helperText="Pick your project from the list. It is locked once chosen." />
+                  )}
+                />
+              ) : (
+                <Autocomplete
+                  freeSolo
+                  options={activeProjects.map((option) => option.code ? `${option.name} (${option.code})` : option.name)}
+                  value={projectName}
+                  onInputChange={handleProjectSelect}
+                  renderInput={(params) => (
+                    <TextField {...params} label="Project Name" required fullWidth />
+                  )}
+                />
+              )}
             </Grid>
             <Grid item xs={12} sm={6}>
               <FormControl fullWidth required>
@@ -1162,8 +1220,8 @@ const SubmitRequest = () => {
             </Typography>
             <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
               <Chip
-                label={`1. Invoice File: ${fileHash ? '✓ Attached' : isFirstSubmission ? 'Missing' : 'Optional — not attached'}`} size="small"
-                sx={{ bgcolor: fileHash || !isFirstSubmission ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: fileHash || !isFirstSubmission ? '#10b981' : '#ef4444', fontWeight: 700 }}
+                label={`1. Invoice File: ${fileHash ? '✓ Attached' : 'Missing (required)'}`} size="small"
+                sx={{ bgcolor: fileHash ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: fileHash ? '#10b981' : '#ef4444', fontWeight: 700 }}
               />
               <Chip 
                 label={`2. Partner Details: ${vendorName && companyName && phone && city ? '✓ Complete' : 'Incomplete'}`} size="small"
@@ -1240,12 +1298,33 @@ const SubmitRequest = () => {
 
           <Button
             type="submit" variant="contained" color="primary" size="large" fullWidth
-            disabled={loading || success || checkingHistory} sx={{ py: 1.5, fontSize: '1.1rem' }}
+            disabled={loading || success || checkingLock || lockingProject || !fileHash} sx={{ py: 1.5, fontSize: '1.1rem' }}
           >
             {loading ? <CircularProgress size={24} color="inherit" /> : '🚀 Submit Disbursement Request'}
           </Button>
+          {!fileHash && (
+            <Typography variant="caption" color="error" display="block" textAlign="center" mt={1}>
+              Attach an invoice to submit: upload it in Step 1, or use "Generate Invoice from Details" above.
+            </Typography>
+          )}
         </form>
       </Paper>
+
+      <Dialog open={!!pendingLockProject} onClose={() => setPendingLockProject(null)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}><Lock fontSize="small" /> Lock this project?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" mb={1.5}>
+            <strong>{pendingLockProject && (pendingLockProject.code ? `${pendingLockProject.name} (${pendingLockProject.code})` : pendingLockProject.name)}</strong>
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            The project is locked for this login. You can't change it until you log out and log in again.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPendingLockProject(null)}>Cancel</Button>
+          <Button variant="contained" startIcon={<Lock />} onClick={confirmProjectLock}>Lock project</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };
