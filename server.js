@@ -422,6 +422,13 @@ async function initPostgres(pgConfig) {
     file_hash TEXT UNIQUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS partner_project_locks (
+    session_key TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    expires_at TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )`);
   await pool.query(`ALTER TABLE requests ADD COLUMN IF NOT EXISTS invoice_code TEXT`).catch(() => {});
 
   await pool.query('CREATE INDEX IF NOT EXISTS idx_requests_requester ON requests(requester)');
@@ -663,6 +670,13 @@ function initSQLite() {
         kind TEXT NOT NULL,
         issued_to TEXT NOT NULL,
         file_hash TEXT UNIQUE,
+        created_at TEXT DEFAULT (datetime('now'))
+      )`);
+      sqliteDb.run(`CREATE TABLE IF NOT EXISTS partner_project_locks (
+        session_key TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        expires_at TEXT,
         created_at TEXT DEFAULT (datetime('now'))
       )`);
       sqliteDb.run(`ALTER TABLE requests ADD COLUMN invoice_code TEXT`, () => {});
@@ -1201,6 +1215,8 @@ const dbAllAsync = (sql, params = []) => new Promise((resolve, reject) =>
   db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows || []))));
 const dbRunAsync = (sql, params = []) => new Promise((resolve, reject) =>
   db.run(sql, params, (err) => (err ? reject(err) : resolve())));
+const dbGetAsync = (sql, params = []) => new Promise((resolve, reject) =>
+  db.get(sql, params, (err, row) => (err ? reject(err) : resolve(row))));
 
 // Projects are never deleted (only marked Completed), so max + 1 never reuses a number.
 async function nextProjectSeq() {
@@ -1456,8 +1472,123 @@ app.get('/api/requests', authenticateToken, (req, res, next) => {
 });
 
 // Create Request (UUID-based)
-app.post('/api/requests', authenticateToken, validate(createRequestSchema), (req, res, next) => {
+// ── Partner project lock ──
+// Partners share login accounts, so the lock belongs to one login (one token), not to the account:
+// the first project a partner picks after logging in is frozen until they log out. Logging in
+// again issues a new token, which starts with no lock.
+const projectDisplayName = (p) => (p.code ? `${p.name} (${p.code})` : p.name);
+
+function loginSessionKey(req) {
+  const token = String(req.headers['authorization'] || '').split(' ')[1] || '';
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+function tokenExpiryIso(req) {
+  const token = String(req.headers['authorization'] || '').split(' ')[1] || '';
+  const decoded = jwt.decode(token);
+  return decoded && decoded.exp ? new Date(decoded.exp * 1000).toISOString() : null;
+}
+
+async function getPartnerProjectLock(req) {
+  const lock = await dbGetAsync('SELECT project_id FROM partner_project_locks WHERE session_key = ? AND user_id = ?',
+    [loginSessionKey(req), req.user.id]);
+  if (!lock) return null;
+  return (await dbGetAsync('SELECT * FROM projects WHERE id = ?', [lock.project_id])) || null;
+}
+
+async function setPartnerProjectLock(req, projectId) {
+  // Clear this account's expired locks while we're here, so the table doesn't grow forever
+  await dbRunAsync('DELETE FROM partner_project_locks WHERE user_id = ? AND expires_at IS NOT NULL AND expires_at < ?',
+    [req.user.id, new Date().toISOString()]);
+  await dbRunAsync('INSERT INTO partner_project_locks (session_key, user_id, project_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?)',
+    [loginSessionKey(req), req.user.id, projectId, tokenExpiryIso(req), new Date().toISOString()]);
+}
+
+app.get('/api/partner/project-lock', authenticateToken, requireRole('VND'), async (req, res, next) => {
+  try {
+    const project = await getPartnerProjectLock(req);
+    res.json({ project: project ? { ...project, display_name: projectDisplayName(project) } : null });
+  } catch (err) { next(err); }
+});
+
+app.post('/api/partner/project-lock', authenticateToken, requireRole('VND'), async (req, res, next) => {
+  try {
+    const projectId = String((req.body && req.body.projectId) || '');
+    const locked = await getPartnerProjectLock(req);
+    if (locked) {
+      if (locked.id === projectId) return res.json({ project: { ...locked, display_name: projectDisplayName(locked) } });
+      return res.status(409).json({
+        error: `Your project is locked to "${projectDisplayName(locked)}" for this login. Log out and log in again to submit for a different project.`,
+        project: { ...locked, display_name: projectDisplayName(locked) },
+      });
+    }
+    const project = await dbGetAsync("SELECT * FROM projects WHERE id = ? AND status = 'Active'", [projectId]);
+    if (!project) return res.status(400).json({ error: 'Select an active project from the list.' });
+    try {
+      await setPartnerProjectLock(req, project.id);
+    } catch (err) {
+      // Two tabs locking at the same moment: whichever landed first wins
+      if (!/unique|duplicate/i.test(err.message || '')) throw err;
+      const winner = await getPartnerProjectLock(req);
+      if (winner && winner.id !== project.id) {
+        return res.status(409).json({ error: `Your project is locked to "${projectDisplayName(winner)}" for this login.`, project: { ...winner, display_name: projectDisplayName(winner) } });
+      }
+    }
+    logger.info({ actor: req.user.id, projectId: project.id }, 'Partner project locked for this login');
+    res.json({ project: { ...project, display_name: projectDisplayName(project) } });
+  } catch (err) { next(err); }
+});
+
+// Partner submissions must carry their own invoice (uploaded or generated — both get an invoice
+// code when uploaded), the invoice must not already back another live request, and the project
+// must be the one locked for this login.
+async function checkPartnerSubmission(req, fileHash, metadata) {
+  if (!fileHash) {
+    return { status: 400, error: 'An invoice is required. Upload your invoice or use "Generate Invoice from Details" before submitting.' };
+  }
+  const code = await dbGetAsync("SELECT code FROM invoice_codes WHERE file_hash = ? AND issued_to = ? AND kind = 'PARTNER'", [fileHash, req.user.id]);
+  if (!code) {
+    return { status: 400, error: 'The attached file is not a partner invoice uploaded from this account. Upload your invoice again or generate one.' };
+  }
+  const reused = await dbGetAsync("SELECT id FROM requests WHERE file_hash = ? AND deleted_at IS NULL AND status <> 'REJ'", [fileHash]);
+  if (reused) {
+    return { status: 409, error: `This invoice is already attached to request ${reused.id}. Upload or generate a new invoice for this submission.` };
+  }
+
+  let projectName = '';
+  try { projectName = String((JSON.parse(metadata || '{}') || {}).projectName || '').trim(); } catch { /* bad metadata */ }
+  if (!projectName) return { status: 400, error: 'Select your project from the list.' };
+
+  const locked = await getPartnerProjectLock(req);
+  if (locked) {
+    if (projectDisplayName(locked) !== projectName && locked.name !== projectName) {
+      return { status: 409, error: `Your project is locked to "${projectDisplayName(locked)}" for this login. Log out and log in again to submit for a different project.` };
+    }
+    return { invoiceCode: code.code };
+  }
+  const active = await dbAllAsync("SELECT * FROM projects WHERE status = 'Active'");
+  const project = active.find(p => projectDisplayName(p) === projectName);
+  if (!project) return { status: 400, error: 'Select an active project from the list.' };
+  try {
+    await setPartnerProjectLock(req, project.id);
+  } catch (err) {
+    if (!/unique|duplicate/i.test(err.message || '')) throw err;
+    const winner = await getPartnerProjectLock(req);
+    if (winner && winner.id !== project.id) {
+      return { status: 409, error: `Your project is locked to "${projectDisplayName(winner)}" for this login.` };
+    }
+  }
+  return { invoiceCode: code.code };
+}
+
+app.post('/api/requests', authenticateToken, validate(createRequestSchema), async (req, res, next) => {
   const { amount, purpose, file_hash, metadata, verifier } = req.validatedBody;
+  if (req.user.role === 'VND') {
+    try {
+      const check = await checkPartnerSubmission(req, file_hash, metadata);
+      if (check.error) return res.status(check.status).json({ error: check.error });
+    } catch (err) { return next(err); }
+  }
   const id = 'REQ-' + crypto.randomUUID().split('-')[0].toUpperCase();
   const ts = new Date().toISOString();
   // All requests start at PND — Debojit verifies as 1st-line first, then Finance, then Owner auth
@@ -2398,9 +2529,6 @@ async function insertBillingDoc(fields) {
   e.status = 409;
   throw e;
 }
-
-const dbGetAsync = (sql, params = []) => new Promise((resolve, reject) =>
-  db.get(sql, params, (err, row) => (err ? reject(err) : resolve(row))));
 
 app.get('/api/billing/config', authenticateToken, requireRole(...BILLING_ROLES), (req, res) => {
   res.json({
