@@ -12,6 +12,7 @@ import {
   Palette as PaletteIcon,
   ArrowBack as ArrowBackIcon,
   Launch as LaunchIcon,
+  ReceiptLong as ReceiptLongIcon,
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useSelector } from 'react-redux';
@@ -45,6 +46,8 @@ const Sidebar = ({ mobileOpen, handleDrawerToggle }) => {
 
     // ── Finance / Owner
     { text: 'Finance Review', icon: <RateReviewIcon />, path: '/finance', roles: ['FIN', 'OWN', 'ADM'] },
+
+    { text: 'Invoices & Estimates', icon: <ReceiptLongIcon />, path: '/billing', roles: ['FIN', 'OWN', 'ADM'], badge: 'NEW' },
 
     { text: 'Subscriptions', icon: <EventNoteIcon />, path: '/subscriptions', roles: ['FIN', 'OWN', 'ADM'] },
 

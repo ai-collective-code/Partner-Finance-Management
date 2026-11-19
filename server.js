@@ -386,6 +386,44 @@ async function initPostgres(pgConfig) {
     FOREIGN KEY (employee_id) REFERENCES users(id)
   )`);
 
+  await pool.query(`CREATE TABLE IF NOT EXISTS billing_docs (
+    id TEXT PRIMARY KEY,
+    doc_type TEXT NOT NULL,
+    doc_number TEXT UNIQUE NOT NULL,
+    project_id TEXT,
+    project_code TEXT,
+    project_name TEXT,
+    client_name TEXT NOT NULL,
+    client_address TEXT,
+    client_gstin TEXT,
+    client_state TEXT,
+    client_email TEXT,
+    client_phone TEXT,
+    issue_date TEXT NOT NULL,
+    due_date TEXT,
+    items TEXT NOT NULL,
+    tax_mode TEXT NOT NULL DEFAULT 'IGST',
+    tax_rate DOUBLE PRECISION NOT NULL DEFAULT 18,
+    subtotal DOUBLE PRECISION NOT NULL DEFAULT 0,
+    tax_amount DOUBLE PRECISION NOT NULL DEFAULT 0,
+    total DOUBLE PRECISION NOT NULL DEFAULT 0,
+    notes TEXT,
+    status TEXT NOT NULL DEFAULT 'Issued',
+    source_id TEXT,
+    created_by TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )`);
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_billing_type ON billing_docs(doc_type)');
+
+  await pool.query(`CREATE TABLE IF NOT EXISTS invoice_codes (
+    code TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    issued_to TEXT NOT NULL,
+    file_hash TEXT UNIQUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )`);
+  await pool.query(`ALTER TABLE requests ADD COLUMN IF NOT EXISTS invoice_code TEXT`).catch(() => {});
+
   await pool.query('CREATE INDEX IF NOT EXISTS idx_requests_requester ON requests(requester)');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status)');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_requests_deleted ON requests(deleted_at)');
@@ -590,6 +628,44 @@ function initSQLite() {
         created_at TEXT DEFAULT (datetime('now')),
         FOREIGN KEY (employee_id) REFERENCES users(id)
       )`);
+
+      sqliteDb.run(`CREATE TABLE IF NOT EXISTS billing_docs (
+        id TEXT PRIMARY KEY,
+        doc_type TEXT NOT NULL,
+        doc_number TEXT UNIQUE NOT NULL,
+        project_id TEXT,
+        project_code TEXT,
+        project_name TEXT,
+        client_name TEXT NOT NULL,
+        client_address TEXT,
+        client_gstin TEXT,
+        client_state TEXT,
+        client_email TEXT,
+        client_phone TEXT,
+        issue_date TEXT NOT NULL,
+        due_date TEXT,
+        items TEXT NOT NULL,
+        tax_mode TEXT NOT NULL DEFAULT 'IGST',
+        tax_rate REAL NOT NULL DEFAULT 18,
+        subtotal REAL NOT NULL DEFAULT 0,
+        tax_amount REAL NOT NULL DEFAULT 0,
+        total REAL NOT NULL DEFAULT 0,
+        notes TEXT,
+        status TEXT NOT NULL DEFAULT 'Issued',
+        source_id TEXT,
+        created_by TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+      )`);
+      sqliteDb.run('CREATE INDEX IF NOT EXISTS idx_billing_type ON billing_docs(doc_type)');
+
+      sqliteDb.run(`CREATE TABLE IF NOT EXISTS invoice_codes (
+        code TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        issued_to TEXT NOT NULL,
+        file_hash TEXT UNIQUE,
+        created_at TEXT DEFAULT (datetime('now'))
+      )`);
+      sqliteDb.run(`ALTER TABLE requests ADD COLUMN invoice_code TEXT`, () => {});
 
       sqliteDb.run('CREATE INDEX IF NOT EXISTS idx_requests_requester ON requests(requester)');
       sqliteDb.run('CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status)');
@@ -1151,28 +1227,35 @@ app.get('/api/projects/next-code', authenticateToken, requireRole('FIN', 'ADM', 
   } catch (err) { next(err); }
 });
 
-app.post('/api/projects', authenticateToken, requireRole('FIN', 'ADM', 'OWN'), async (req, res, next) => {
-  const { name, details, partnerName, partnerPhone, clientCode, projectTag, type, startDate } = req.body;
-  if (!name || !String(name).trim()) return res.status(400).json({ error: 'Project name is required' });
+// Creates a project with an auto-generated AiC code. Returns { project } or { status, error }.
+// Shared by the Projects screen and the Invoice/Estimate generator.
+async function createProjectWithCode({ name, details, partnerName, partnerPhone, clientCode, projectTag, type, startDate }) {
+  if (!name || !String(name).trim()) return { status: 400, error: 'Project name is required' };
   const p = projectCodePrefix({ clientCode, projectTag, type, startDate });
-  if (p.error) return res.status(400).json({ error: p.error });
+  if (p.error) return { status: 400, error: p.error };
 
-  try {
-    // Retry if two people create a project at the same moment and pick the same number
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const code = p.prefix + formatSeq(await nextProjectSeq());
-      const id = 'PRJ-' + crypto.randomUUID().split('-')[0].toUpperCase();
-      try {
-        await dbRunAsync(
-          'INSERT INTO projects (id, name, code, details, partner_name, partner_phone, project_type, start_date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          [id, name.trim(), code, details || null, partnerName || null, partnerPhone || null, p.type, p.startDate, 'Active', new Date().toISOString()]
-        );
-        return res.json({ id, name: name.trim(), code, details, partner_name: partnerName, partner_phone: partnerPhone, project_type: p.type, start_date: p.startDate, status: 'Active' });
-      } catch (err) {
-        if (!/unique|duplicate/i.test(err.message || '')) throw err;
-      }
+  // Retry if two people create a project at the same moment and pick the same number
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = p.prefix + formatSeq(await nextProjectSeq());
+    const id = 'PRJ-' + crypto.randomUUID().split('-')[0].toUpperCase();
+    try {
+      await dbRunAsync(
+        'INSERT INTO projects (id, name, code, details, partner_name, partner_phone, project_type, start_date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [id, String(name).trim(), code, details || null, partnerName || null, partnerPhone || null, p.type, p.startDate, 'Active', new Date().toISOString()]
+      );
+      return { project: { id, name: String(name).trim(), code, details, partner_name: partnerName, partner_phone: partnerPhone, project_type: p.type, start_date: p.startDate, status: 'Active' } };
+    } catch (err) {
+      if (!/unique|duplicate/i.test(err.message || '')) throw err;
     }
-    res.status(409).json({ error: 'Could not reserve a unique project code. Please try again.' });
+  }
+  return { status: 409, error: 'Could not reserve a unique project code. Please try again.' };
+}
+
+app.post('/api/projects', authenticateToken, requireRole('FIN', 'ADM', 'OWN'), async (req, res, next) => {
+  try {
+    const result = await createProjectWithCode(req.body || {});
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    res.json(result.project);
   } catch (err) { next(err); }
 });
 
@@ -1380,9 +1463,13 @@ app.post('/api/requests', authenticateToken, validate(createRequestSchema), (req
   // All requests start at PND — Debojit verifies as 1st-line first, then Finance, then Owner auth
   const sig = signAuditEntry(id, req.user.id, '-', 'PND', 'Request submitted. Awaiting first-line verification.', ts);
 
+  // Carry the attached invoice's unique code onto the request (only the uploader's own file counts)
+  db.get('SELECT code FROM invoice_codes WHERE file_hash = ? AND issued_to = ?', [file_hash || '', req.user.id], (codeErr, codeRow) => {
+  if (codeErr) return next(codeErr);
+  const invoiceCode = codeRow ? codeRow.code : null;
   db.serialize(() => {
-    db.run('INSERT INTO requests (id, amount, purpose, status, requester, verifier, ts, file_hash, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, amount, purpose, 'PND', req.user.id, verifier || null, ts, file_hash || null, metadata || null]);
+    db.run('INSERT INTO requests (id, amount, purpose, status, requester, verifier, ts, file_hash, metadata, invoice_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, amount, purpose, 'PND', req.user.id, verifier || null, ts, file_hash || null, metadata || null, invoiceCode]);
     db.run('INSERT INTO audit_logs (reqId, actor, prev, next, comment, ts, ip_address, user_agent, signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [id, req.user.id, '-', 'PND', 'Request submitted. Awaiting first-line verification.', ts, req.clientIp, req.clientAgent, sig]);
     
@@ -1397,8 +1484,9 @@ app.post('/api/requests', authenticateToken, validate(createRequestSchema), (req
       }
     });
 
-    logger.info({ requestId: id, amount, verifier, actor: req.user.id }, 'Request created with verifier');
-    res.json({ success: true, id });
+    logger.info({ requestId: id, amount, verifier, invoiceCode, actor: req.user.id }, 'Request created with verifier');
+    res.json({ success: true, id, invoice_code: invoiceCode });
+  });
   });
 });
 
@@ -2015,21 +2103,94 @@ async function processInvoiceOCR(filePath, originalFilename, mimeType) {
 }
 
 // Vendor Invoice Upload - returns file hash & extracted invoice parameters
+// ── Unique invoice numbers: ONE series for every invoice ──
+// Every invoice in the app draws its number from the same running series:
+//   AiC/<FY>/<NNNN>   e.g. AiC/26-27/0042
+// shared by partner invoices (uploaded or generated), salary requests and Tax Invoices made on
+// the Invoices & Estimates page. invoice_codes is the single register of issued numbers (its
+// primary key guarantees no duplicates); `kind` records where each one went. The count restarts
+// each financial year (April–March). Numbers are never reused — one reserved for a generated PDF
+// that is then discarded stays unused, so there can be gaps but never duplicates.
+const INVOICE_CODE_KINDS = { PARTNER: 'Partner invoice', SALARY: 'Salary request', BILLING: 'Tax Invoice' };
+const UPLOAD_INVOICE_KINDS = ['PARTNER', 'SALARY']; // kinds a request form may ask for
+
+function todayIso() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+const invoiceSeriesPrefix = (isoDate) => `AiC/${financialYear(isoDate || todayIso())}/`;
+
+async function nextInvoiceSeq(prefix) {
+  const rows = await dbAllAsync('SELECT code FROM invoice_codes WHERE code LIKE ?', [prefix + '%']);
+  let max = 0;
+  for (const { code } of rows) {
+    const n = parseInt(String(code).slice(prefix.length), 10);
+    if (Number.isFinite(n)) max = Math.max(max, n);
+  }
+  return max + 1;
+}
+
+async function issueInvoiceCode(kind, userId, fileHash = null, isoDate = null) {
+  const prefix = invoiceSeriesPrefix(isoDate);
+  // Retry if two invoices are numbered at the same moment and pick the same number
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = prefix + String(await nextInvoiceSeq(prefix)).padStart(4, '0');
+    try {
+      await dbRunAsync('INSERT INTO invoice_codes (code, kind, issued_to, file_hash, created_at) VALUES (?, ?, ?, ?, ?)',
+        [code, kind, userId, fileHash, new Date().toISOString()]);
+      return code;
+    } catch (err) {
+      if (!/unique|duplicate/i.test(err.message || '')) throw err;
+    }
+  }
+  throw new Error('Could not issue a unique invoice code');
+}
+
+// Generated PDFs need their code before the PDF is drawn, so the form reserves one first
+// and sends it back with the upload (field "invoice_code").
+app.post('/api/invoices/reserve-code', authenticateToken, async (req, res, next) => {
+  try {
+    const kind = String((req.body || {}).kind || '').toUpperCase();
+    if (!UPLOAD_INVOICE_KINDS.includes(kind)) return res.status(400).json({ error: 'kind must be PARTNER or SALARY' });
+    res.json({ invoice_code: await issueInvoiceCode(kind, req.user.id) });
+  } catch (err) { next(err); }
+});
+
+// Links an uploaded invoice file to its code: the reserved one if valid, else a fresh one.
+async function assignInvoiceCode(kind, userId, fileHash, reservedCode) {
+  if (reservedCode) {
+    const row = await dbGetAsync('SELECT code, kind, issued_to, file_hash FROM invoice_codes WHERE code = ?', [reservedCode]);
+    if (row && row.issued_to === userId && row.kind === kind && !row.file_hash) {
+      await dbRunAsync('UPDATE invoice_codes SET file_hash = ? WHERE code = ? AND file_hash IS NULL', [fileHash, reservedCode]);
+      return reservedCode;
+    }
+  }
+  return issueInvoiceCode(kind, userId, fileHash);
+}
+
 app.post('/api/invoices/upload', authenticateToken, upload.single('invoice'), async (req, res, next) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded. Field name must be "invoice".' });
 
   const file = req.file;
   const skipOcr = req.body.skip_ocr === 'true' || req.body.skip_ocr === true;
-  logger.info({ filename: file.filename, size: file.size, mime: file.mimetype, skipOcr }, 'Invoice file uploaded for processing');
+  // invoice_kind marks the file as the request's invoice (not a cheque / bank document),
+  // so it gets a unique invoice code.
+  const invoiceKind = String(req.body.invoice_kind || '').toUpperCase();
+  logger.info({ filename: file.filename, size: file.size, mime: file.mimetype, skipOcr, invoiceKind }, 'Invoice file uploaded for processing');
 
   // Record who uploaded the file so /api/files can let them (and only them, besides
   // reviewers) preview it before the request is submitted.
+  let invoiceCode = null;
   try {
     await new Promise((resolve, reject) => {
       db.run('INSERT INTO attachments (id, filename, mime_type, file_size, file_hash, uploaded_by) VALUES (?, ?, ?, ?, ?, ?)',
         [file.filename, file.originalname, file.mimetype, file.size, file.filename, req.user.id],
         (err) => (err ? reject(err) : resolve()));
     });
+    if (UPLOAD_INVOICE_KINDS.includes(invoiceKind)) {
+      invoiceCode = await assignInvoiceCode(invoiceKind, req.user.id, file.filename, req.body.invoice_code);
+    }
   } catch (err) {
     try { fs.unlinkSync(file.path); } catch (e) {}
     return next(err);
@@ -2039,6 +2200,7 @@ app.post('/api/invoices/upload', authenticateToken, upload.single('invoice'), as
   if (skipOcr) {
     return res.json({
       success: true,
+      invoice_code: invoiceCode,
       file_hash: file.filename,
       filename: file.originalname,
       file_size: file.size,
@@ -2056,6 +2218,7 @@ app.post('/api/invoices/upload', authenticateToken, upload.single('invoice'), as
     const ocrData = await processInvoiceOCR(file.path, file.originalname, file.mimetype);
     res.json({
       success: true,
+      invoice_code: invoiceCode,
       file_hash: file.filename,
       filename: file.originalname,
       file_size: file.size,
@@ -2096,6 +2259,272 @@ app.get('/api/worksheets', authenticateToken, (req, res, next) => {
   });
 });
 
+// ══════════ BILLING: INVOICES / ESTIMATES ══════════
+// Accounts fill in a few key details; the server assigns the document number, links the
+// project's AiC code (creating the project + code on the fly if needed) and computes all totals.
+//
+// Document number (FY = Indian financial year, April–March, of the issue date):
+//   Tax Invoice                      AiC/<FY>/<NNNN>         e.g. AiC/26-27/0042
+//       — the single invoice series shared with partner and salary invoices (see invoice_codes)
+//   Proforma / Estimate / Quotation  AiC/<TYPE>/<FY>/<NNN>   e.g. AiC/EST/26-27/007
+// Documents are never deleted (only marked Cancelled), so numbers are never reused — as GST rules expect.
+const BILLING_DOC_TYPES = {
+  INV: 'Tax Invoice',
+  PI: 'Proforma Invoice',
+  EST: 'Estimate',
+  QUO: 'Quotation',
+};
+const BILLING_TAX_RATES = [0, 5, 12, 18, 28];
+const BILLING_STATUSES = ['Issued', 'Sent', 'Accepted', 'Paid', 'Cancelled'];
+const BILLING_ROLES = ['FIN', 'OWN', 'ADM'];
+
+const billingCompany = () => ({
+  name: process.env.BILLING_COMPANY_NAME || 'AI Collective',
+  address: process.env.BILLING_COMPANY_ADDRESS || '',
+  gstin: process.env.BILLING_COMPANY_GSTIN || '',
+  pan: process.env.BILLING_COMPANY_PAN || '',
+  // Same default as OUR_COMPANY_STATE in the partner form (SubmitRequest.js)
+  state: process.env.BILLING_COMPANY_STATE || 'Uttar Pradesh',
+  email: process.env.BILLING_COMPANY_EMAIL || '',
+  phone: process.env.BILLING_COMPANY_PHONE || '',
+  bank: process.env.BILLING_BANK_DETAILS || '',
+});
+
+const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function financialYear(isoDate) {
+  const [y, m] = isoDate.split('-').map(Number);
+  const start = m >= 4 ? y : y - 1;
+  return `${String(start % 100).padStart(2, '0')}-${String((start + 1) % 100).padStart(2, '0')}`;
+}
+const docNumberPrefix = (type, isoDate) => `AiC/${type}/${financialYear(isoDate)}/`;
+
+async function nextDocSeq(prefix) {
+  const rows = await dbAllAsync('SELECT doc_number FROM billing_docs WHERE doc_number LIKE ?', [prefix + '%']);
+  let max = 0;
+  for (const { doc_number } of rows) {
+    const n = parseInt(String(doc_number).slice(prefix.length), 10);
+    if (Number.isFinite(n)) max = Math.max(max, n);
+  }
+  return max + 1;
+}
+
+function computeTotals(items, taxMode, taxRate) {
+  const lines = items.map(it => ({
+    description: it.description.trim(),
+    sac: (it.sac || '').trim(),
+    qty: Number(it.qty),
+    rate: round2(it.rate),
+    amount: round2(Number(it.qty) * Number(it.rate)),
+  }));
+  const subtotal = round2(lines.reduce((s, l) => s + l.amount, 0));
+  const rate = taxMode === 'NONE' ? 0 : Number(taxRate);
+  const taxAmount = round2(subtotal * rate / 100);
+  return { lines, subtotal, taxRate: rate, taxAmount, total: round2(subtotal + taxAmount) };
+}
+
+const billingItemSchema = z.object({
+  description: z.string().trim().min(1, 'Item description is required').max(300),
+  sac: z.string().max(20).optional(),
+  qty: z.coerce.number().positive('Quantity must be more than 0').max(1000000),
+  rate: z.coerce.number().min(0).max(1000000000),
+});
+
+const billingDocSchema = z.object({
+  docType: z.enum(Object.keys(BILLING_DOC_TYPES)),
+  issueDate: z.string().regex(ISO_DATE_RE, 'Issue date must be YYYY-MM-DD'),
+  dueDate: z.string().regex(ISO_DATE_RE).optional().or(z.literal('')),
+  projectId: z.string().max(64).optional().or(z.literal('')),
+  newProject: z.object({
+    name: z.string().trim().min(1).max(200),
+    clientCode: z.string().max(5),
+    projectTag: z.string().max(6),
+    type: z.string().max(5),
+    startDate: z.string().regex(ISO_DATE_RE),
+  }).optional(),
+  client: z.object({
+    name: z.string().trim().min(1, 'Client name is required').max(200),
+    address: z.string().max(500).optional(),
+    gstin: z.string().trim().max(15).optional(),
+    state: z.string().max(60).optional(),
+    email: z.string().max(200).optional(),
+    phone: z.string().max(30).optional(),
+  }),
+  items: z.array(billingItemSchema).min(1, 'Add at least one item').max(50),
+  taxMode: z.enum(['CGST_SGST', 'IGST', 'NONE']),
+  taxRate: z.coerce.number().refine(r => BILLING_TAX_RATES.includes(r), 'GST rate must be 0, 5, 12, 18 or 28'),
+  notes: z.string().max(2000).optional(),
+});
+
+function formatBillingRow(row) {
+  if (!row) return row;
+  let items = [];
+  try { items = JSON.parse(row.items || '[]'); } catch { /* keep empty */ }
+  return { ...row, items };
+}
+
+// Number for a new billing document. Tax Invoices take the next number from the single invoice
+// series shared with partner and salary invoices (AiC/26-27/0042); Proforma, Estimate and
+// Quotation are not invoices, so they keep their own per-type series (AiC/EST/26-27/001).
+async function nextBillingDocNumber(fields) {
+  if (fields.doc_type === 'INV') return issueInvoiceCode('BILLING', fields.created_by, null, fields.issue_date);
+  const prefix = docNumberPrefix(fields.doc_type, fields.issue_date);
+  return prefix + formatSeq(await nextDocSeq(prefix));
+}
+
+// Inserts a document with the next number (retrying on a clash).
+async function insertBillingDoc(fields) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const docNumber = await nextBillingDocNumber(fields);
+    const id = 'BIL-' + crypto.randomUUID().split('-')[0].toUpperCase();
+    const row = { id, doc_number: docNumber, status: 'Issued', created_at: new Date().toISOString(), ...fields };
+    try {
+      await dbRunAsync(
+        `INSERT INTO billing_docs (id, doc_type, doc_number, project_id, project_code, project_name, client_name, client_address,
+          client_gstin, client_state, client_email, client_phone, issue_date, due_date, items, tax_mode, tax_rate, subtotal,
+          tax_amount, total, notes, status, source_id, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [row.id, row.doc_type, row.doc_number, row.project_id, row.project_code, row.project_name, row.client_name, row.client_address,
+          row.client_gstin, row.client_state, row.client_email, row.client_phone, row.issue_date, row.due_date, row.items, row.tax_mode,
+          row.tax_rate, row.subtotal, row.tax_amount, row.total, row.notes, row.status, row.source_id || null, row.created_by, row.created_at]
+      );
+      return formatBillingRow(row);
+    } catch (err) {
+      if (!/unique|duplicate/i.test(err.message || '')) throw err;
+    }
+  }
+  const e = new Error('Could not reserve a unique document number. Please try again.');
+  e.status = 409;
+  throw e;
+}
+
+const dbGetAsync = (sql, params = []) => new Promise((resolve, reject) =>
+  db.get(sql, params, (err, row) => (err ? reject(err) : resolve(row))));
+
+app.get('/api/billing/config', authenticateToken, requireRole(...BILLING_ROLES), (req, res) => {
+  res.json({
+    company: billingCompany(),
+    docTypes: Object.entries(BILLING_DOC_TYPES).map(([code, label]) => ({ code, label })),
+    taxRates: BILLING_TAX_RATES,
+    statuses: BILLING_STATUSES,
+  });
+});
+
+// Preview of the number the next document would get (only reserved on create)
+app.get('/api/billing/next-number', authenticateToken, requireRole(...BILLING_ROLES), async (req, res, next) => {
+  try {
+    const type = String(req.query.type || '').toUpperCase();
+    const date = String(req.query.date || '');
+    if (!BILLING_DOC_TYPES[type]) return res.status(400).json({ error: 'Unknown document type' });
+    if (!ISO_DATE_RE.test(date)) return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    if (type === 'INV') {
+      const prefix = invoiceSeriesPrefix(date);
+      return res.json({ number: prefix + String(await nextInvoiceSeq(prefix)).padStart(4, '0') });
+    }
+    const prefix = docNumberPrefix(type, date);
+    res.json({ number: prefix + formatSeq(await nextDocSeq(prefix)) });
+  } catch (err) { next(err); }
+});
+
+app.get('/api/billing/docs', authenticateToken, requireRole(...BILLING_ROLES), async (req, res, next) => {
+  try {
+    const type = String(req.query.type || '').toUpperCase();
+    const rows = BILLING_DOC_TYPES[type]
+      ? await dbAllAsync('SELECT * FROM billing_docs WHERE doc_type = ? ORDER BY created_at DESC', [type])
+      : await dbAllAsync('SELECT * FROM billing_docs ORDER BY created_at DESC');
+    res.json(rows.map(formatBillingRow));
+  } catch (err) { next(err); }
+});
+
+app.get('/api/billing/docs/:id', authenticateToken, requireRole(...BILLING_ROLES), async (req, res, next) => {
+  try {
+    const row = await dbGetAsync('SELECT * FROM billing_docs WHERE id = ?', [req.params.id]);
+    if (!row) return res.status(404).json({ error: 'Document not found' });
+    res.json(formatBillingRow(row));
+  } catch (err) { next(err); }
+});
+
+app.post('/api/billing/docs', authenticateToken, requireRole(...BILLING_ROLES), validate(billingDocSchema), async (req, res, next) => {
+  const b = req.validatedBody;
+  try {
+    // Resolve the project — an existing one, or a new one created here with its own AiC code
+    let project = null;
+    if (b.projectId) {
+      project = await dbGetAsync('SELECT id, name, code FROM projects WHERE id = ?', [b.projectId]);
+      if (!project) return res.status(400).json({ error: 'Selected project was not found' });
+    } else if (b.newProject) {
+      const created = await createProjectWithCode({ ...b.newProject, partnerName: b.client.name, partnerPhone: b.client.phone });
+      if (created.error) return res.status(created.status).json({ error: created.error });
+      project = created.project;
+    } else {
+      return res.status(400).json({ error: 'Pick a project or create a new one (needed for the AiC code)' });
+    }
+
+    const t = computeTotals(b.items, b.taxMode, b.taxRate);
+    const doc = await insertBillingDoc({
+      doc_type: b.docType,
+      project_id: project.id,
+      project_code: project.code,
+      project_name: project.name,
+      client_name: b.client.name.trim(),
+      client_address: b.client.address || null,
+      client_gstin: b.client.gstin ? b.client.gstin.toUpperCase() : null,
+      client_state: b.client.state || null,
+      client_email: b.client.email || null,
+      client_phone: b.client.phone || null,
+      issue_date: b.issueDate,
+      due_date: b.dueDate || null,
+      items: JSON.stringify(t.lines),
+      tax_mode: b.taxMode,
+      tax_rate: t.taxRate,
+      subtotal: t.subtotal,
+      tax_amount: t.taxAmount,
+      total: t.total,
+      notes: b.notes || null,
+      created_by: req.user.id,
+    });
+    logger.info({ id: doc.id, number: doc.doc_number, code: doc.project_code, by: req.user.id }, 'Billing document created');
+    res.json(doc);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
+// Turn an Estimate / Quotation / Proforma into a Tax Invoice (new invoice number, same project + AiC code)
+app.post('/api/billing/docs/:id/convert', authenticateToken, requireRole(...BILLING_ROLES), async (req, res, next) => {
+  try {
+    const src = await dbGetAsync('SELECT * FROM billing_docs WHERE id = ?', [req.params.id]);
+    if (!src) return res.status(404).json({ error: 'Document not found' });
+    if (src.doc_type === 'INV') return res.status(400).json({ error: 'This is already a Tax Invoice' });
+    if (src.status === 'Cancelled') return res.status(400).json({ error: 'A cancelled document cannot be converted' });
+    const existing = await dbGetAsync("SELECT doc_number FROM billing_docs WHERE source_id = ? AND doc_type = 'INV' AND status != 'Cancelled'", [src.id]);
+    if (existing) return res.status(409).json({ error: `Already converted to invoice ${existing.doc_number}` });
+
+    const d = new Date();
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const { id, doc_number, status, created_at, created_by, ...fields } = src; // eslint-disable-line no-unused-vars
+    const doc = await insertBillingDoc({ ...fields, doc_type: 'INV', issue_date: today, due_date: null, source_id: src.id, created_by: req.user.id });
+    await dbRunAsync('UPDATE billing_docs SET status = ? WHERE id = ?', ['Accepted', src.id]);
+    logger.info({ from: src.doc_number, to: doc.doc_number, by: req.user.id }, 'Billing document converted to invoice');
+    res.json(doc);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
+app.put('/api/billing/docs/:id/status', authenticateToken, requireRole(...BILLING_ROLES), async (req, res, next) => {
+  try {
+    const status = String((req.body || {}).status || '');
+    if (!BILLING_STATUSES.includes(status)) return res.status(400).json({ error: `Status must be one of: ${BILLING_STATUSES.join(', ')}` });
+    const row = await dbGetAsync('SELECT id FROM billing_docs WHERE id = ?', [req.params.id]);
+    if (!row) return res.status(404).json({ error: 'Document not found' });
+    await dbRunAsync('UPDATE billing_docs SET status = ? WHERE id = ?', [status, req.params.id]);
+    res.json({ id: req.params.id, status });
+  } catch (err) { next(err); }
+});
 
 // Fallback to index.html for SPA routing
 app.use((req, res) => {
