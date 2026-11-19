@@ -52,6 +52,7 @@ const VendorPortal = () => {
     try {
       const formData = new FormData();
       formData.append('invoice', file);
+      formData.append('invoice_kind', 'PARTNER'); // gets a unique invoice code from the server
 
       // Simulate progress
       const progressInterval = setInterval(() => {

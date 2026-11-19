@@ -534,7 +534,14 @@ const FinanceReview = () => {
                 const vInfo = getVerifierInfo(req);
                 return (
                   <TableRow key={req.id} sx={{ '&:hover': { backgroundColor: 'rgba(255,255,255,0.02)' } }}>
-                    <TableCell sx={{ fontFamily: 'monospace', fontSize: 12 }}>{req.id}</TableCell>
+                    <TableCell sx={{ fontFamily: 'monospace', fontSize: 12 }}>
+                      {req.id}
+                      {req.invoice_code && (
+                        <Typography variant="caption" display="block" color="primary.light" sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                          {req.invoice_code}
+                        </Typography>
+                      )}
+                    </TableCell>
                     <TableCell>
                       <Tooltip title={req.purpose}>
                         <Typography variant="body2" noWrap sx={{ maxWidth: 140 }}>{req.purpose}</Typography>
@@ -595,7 +602,14 @@ const FinanceReview = () => {
             <>
               <DialogTitle>
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <Typography fontWeight={700}>Review: {selected.id}</Typography>
+                  <Box>
+                    <Typography fontWeight={700}>Review: {selected.id}</Typography>
+                    {selected.invoice_code && (
+                      <Typography variant="caption" color="primary.light" sx={{ fontFamily: 'monospace' }}>
+                        Invoice code: {selected.invoice_code}
+                      </Typography>
+                    )}
+                  </Box>
                   <Chip label={statusLabel(selected.status)} color={statusColor(selected.status)} size="small" />
                 </Box>
               </DialogTitle>

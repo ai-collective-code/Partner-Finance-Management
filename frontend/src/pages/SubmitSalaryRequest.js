@@ -117,12 +117,13 @@ const SubmitSalaryRequest = () => {
     const formData = new FormData();
     formData.append('invoice', file); // backend field name is generic
     formData.append('skip_ocr', 'true'); // payslip/ID proof — no AI extraction needed
+    formData.append('invoice_kind', 'SALARY'); // gets a unique invoice code from the server
     try {
       const res = await apiFetch('/api/invoices/upload', { method: 'POST', body: formData });
       if (res.ok) {
         const data = await res.json();
         setFileHash(data.file_hash);
-        setUploadMessage('✅ Document uploaded successfully!');
+        setUploadMessage(`✅ Document uploaded successfully!${data.invoice_code ? ` Invoice code: ${data.invoice_code}` : ''}`);
       } else {
         const data = await res.json().catch(() => ({}));
         setUploadMessage(data.error || '❌ Upload failed.');
@@ -144,7 +145,16 @@ const SubmitSalaryRequest = () => {
     setGeneratingInvoice(true);
     setUploadMessage('Generating invoice from your details...');
     try {
+      // Reserve the unique invoice code first so it can be printed on the PDF
+      const codeRes = await apiFetch('/api/invoices/reserve-code', { method: 'POST', body: { kind: 'SALARY' } });
+      const codeData = await codeRes.json().catch(() => ({}));
+      if (!codeRes.ok || !codeData.invoice_code) {
+        setUploadMessage(codeData.error || '❌ Could not get an invoice code. Please try again.');
+        return;
+      }
+      const invoiceCode = codeData.invoice_code;
       const pdfFile = generateInvoicePdf({
+        invoiceNo: invoiceCode,
         title: 'Salary Payment Request',
         fromName: employeeName,
         fromDetail: employeeCode ? `Employee ID: ${employeeCode}` : '',
@@ -160,11 +170,13 @@ const SubmitSalaryRequest = () => {
       const formData = new FormData();
       formData.append('invoice', pdfFile);
       formData.append('skip_ocr', 'true');
+      formData.append('invoice_kind', 'SALARY');
+      formData.append('invoice_code', invoiceCode);
       const res = await apiFetch('/api/invoices/upload', { method: 'POST', body: formData });
       if (res.ok) {
         const data = await res.json();
         setFileHash(data.file_hash);
-        setUploadMessage('✅ Invoice generated and attached from your details.');
+        setUploadMessage(`✅ Invoice ${data.invoice_code || invoiceCode} generated and attached from your details.`);
       } else {
         const data = await res.json().catch(() => ({}));
         setUploadMessage(data.error || '❌ Failed to generate invoice.');
