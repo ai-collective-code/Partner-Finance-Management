@@ -75,9 +75,10 @@ export function generateBillingPdf(doc, company = {}) {
   pdf.setTextColor(30, 30, 60);
   text(company.name || 'AI Collective', L, y);
 
+  const stage = doc.doc_type === 'INV' ? (doc.billing_stage || 'FULL') : 'FULL';
   pdf.setFontSize(15);
   pdf.setTextColor(79, 70, 229);
-  text(DOC_TITLES[doc.doc_type] || doc.doc_type, R, y, { align: 'right' });
+  text(stage === 'ADVANCE' ? 'ADVANCE INVOICE' : (DOC_TITLES[doc.doc_type] || doc.doc_type), R, y, { align: 'right' });
 
   pdf.setFont('helvetica', 'normal');
   pdf.setFontSize(8.5);
@@ -172,29 +173,48 @@ export function generateBillingPdf(doc, company = {}) {
   // ── Totals
   ensureSpace(40);
   y += 3;
+  // value may be a number, or a string printed as-is (e.g. "Not charged")
   const totalRow = (label, value, bold) => {
     pdf.setFont('helvetica', bold ? 'bold' : 'normal');
     pdf.setFontSize(bold ? 10.5 : 9);
     pdf.setTextColor(bold ? 20 : 70);
     text(label, 150, y, { align: 'right' });
-    text(`Rs. ${formatINR(value)}`, cols.amt, y, { align: 'right' });
+    const shown = typeof value === 'string' ? value
+      : Number(value) < 0 ? `- Rs. ${formatINR(-Number(value))}` : `Rs. ${formatINR(value)}`;
+    text(shown, cols.amt, y, { align: 'right' });
     y += bold ? 7 : 5.5;
   };
+  const rule = () => { pdf.setDrawColor(180); pdf.line(110, y - 3.5, R, y - 3.5); y += 1; };
+
   totalRow('Subtotal', doc.subtotal);
-  if (doc.tax_mode === 'CGST_SGST') {
+  if (stage === 'ADVANCE') {
+    totalRow('GST', 'Charged in final invoice');
+  } else if (doc.tax_mode === 'CGST_SGST') {
     const half = Math.round(Number(doc.tax_amount) * 50) / 100;
     totalRow(`CGST @ ${Number(doc.tax_rate) / 2}%`, half);
     totalRow(`SGST @ ${Number(doc.tax_rate) / 2}%`, Number(doc.tax_amount) - half);
   } else if (doc.tax_mode === 'IGST') {
     totalRow(`IGST @ ${Number(doc.tax_rate)}%`, doc.tax_amount);
   }
-  pdf.setDrawColor(180);
-  pdf.line(110, y - 3.5, R, y - 3.5);
-  y += 1;
-  totalRow('Total', doc.total, true);
+  rule();
+
+  // Final invoice: full value with GST, then each advance already invoiced, then what is left to pay
+  const advances = stage === 'FINAL' ? (doc.adjusted_advances || []) : [];
+  if (stage === 'FINAL' && advances.length) {
+    totalRow('Invoice total', doc.total, false);
+    advances.forEach((a) => {
+      ensureSpace(8);
+      totalRow(`Less: advance ${a.doc_number} (${fmtDate(a.issue_date)})`, -Number(a.amount));
+    });
+    rule();
+    totalRow('Balance due', doc.balance_due, true);
+  } else {
+    totalRow(stage === 'ADVANCE' ? 'Advance amount' : 'Total', doc.total, true);
+  }
+  const payable = stage === 'FINAL' && advances.length ? doc.balance_due : doc.total;
 
   pdf.setFont('helvetica', 'italic'); pdf.setFontSize(8.5); pdf.setTextColor(70);
-  const words = pdf.splitTextToSize(`Amount in words: ${amountInWords(doc.total)}`, W);
+  const words = pdf.splitTextToSize(`Amount in words: ${amountInWords(payable)}`, W);
   text(words, L, y);
   y += 4.5 * words.length + 4;
 
@@ -209,6 +229,9 @@ export function generateBillingPdf(doc, company = {}) {
     text(lines, L, y); y += 4 * lines.length + 4;
   };
   if (doc.doc_type === 'INV' || doc.doc_type === 'PI') block('BANK DETAILS', company.bank);
+  if (stage === 'ADVANCE') {
+    block('ADVANCE', 'This is an advance against the project above. GST is not charged on it; GST on the full project value is charged in the final invoice, which deducts this advance.');
+  }
   block('NOTES / TERMS', doc.notes);
 
   // ── Signature
