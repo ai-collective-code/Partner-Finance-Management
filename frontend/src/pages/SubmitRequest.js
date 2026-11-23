@@ -18,7 +18,7 @@ import {
 } from '@mui/icons-material';
 import { PageHeader, SectionCard, ToneChip, KeyValue, Code, ChecklistCard } from '../components/ui';
 import { tokens, tones } from '../theme';
-import { formatINR, parseMsg } from '../utils/format';
+import { formatINR, parseMsg, localToday } from '../utils/format';
 
 const OUR_COMPANY_STATE = 'Uttar Pradesh';
 
@@ -503,7 +503,7 @@ const SubmitRequest = () => {
           gstin: gstOn ? gstNumber : '',
         },
         toName: 'Ai Collective Finance',
-        date: new Date().toISOString().slice(0, 10),
+        date: localToday(),
         project: {
           name: selectedProject?.name || projectName,
           code: selectedProject?.code || '',

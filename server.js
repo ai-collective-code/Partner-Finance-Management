@@ -2083,53 +2083,110 @@ Return ONLY a valid JSON object with NO markdown, NO code fences, NO backticks. 
   });
 }
 
-// Regex-based text parsing heuristic for fallback OCR
-function parseRawInvoiceText(text, originalFilename) {
-  let amount = 1000;
-  // Look for total/amount patterns (e.g. Total: ₹15,000.00, RS 2400, Total (INR) 5,000.00)
-  const amtMatch = text.match(/(?:total|amount|amt|payable|sum|net|gross)[\s\W]*(?:rs\.?|inr|₹|usd|\$)?[\s\W]*([\d,]+(?:\.\d{2})?)/i);
-  if (amtMatch) {
-    amount = parseFloat(amtMatch[1].replace(/,/g, ''));
-  }
+// ── Text parsing heuristics for the local (non-AI) OCR fallbacks ──
+// Everything here returns null when it cannot find a value, instead of guessing: a blank field the
+// partner fills in is better than a plausible-looking wrong one.
+const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+const MONTH_RE = '(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?';
 
-  // Look for 15-character GSTIN pattern
-  const gstMatch = text.match(/\b\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}[Z]{1}[A-Z\d]{1}\b/);
-  const gstNumber = gstMatch ? gstMatch[0] : null;
+// Builds YYYY-MM-DD without going through Date/toISOString, which shifts the day across timezones
+function isoDateOrNull(y, m, d) {
+  y = Number(y); m = Number(m); d = Number(d);
+  if (y < 100) y += 2000;
+  if (!(y >= 2000 && y <= 2100 && m >= 1 && m <= 12 && d >= 1 && d <= 31)) return null;
+  const probe = new Date(Date.UTC(y, m - 1, d));
+  if (probe.getUTCMonth() !== m - 1) return null; // e.g. 31 Feb
+  return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
 
-  // Look for dates (e.g. 2024-05-28, 28/05/2024, Apr 28, 2026)
-  const dateMatch = text.match(/\b(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2},?\s+\d{4})|(?:\d{1,2}[-\/.]\d{1,2}[-\/.]\d{2,4})|(?:\d{4}[-\/.]\d{1,2}[-\/.]\d{1,2})\b/i);
-  let invoiceDate = new Date().toISOString().split('T')[0];
-  if (dateMatch) {
-    try {
-      const d = new Date(dateMatch[0]);
-      if (!isNaN(d)) invoiceDate = d.toISOString().split('T')[0];
-    } catch (e) {}
-  }
-
-  // Look for vendor name
-  let vendorName = 'Unknown Vendor';
-  const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-  
-  const billedByLine = lines.find(l => l.toLowerCase().startsWith('billed by:') || l.toLowerCase().startsWith('from:'));
-  if (billedByLine) {
-    vendorName = billedByLine.replace(/^(billed by:|from:)\s*/i, '').substring(0, 40);
-  } else {
-    const billedByIndex = lines.findIndex(l => l.toLowerCase() === 'billed by' || l.toLowerCase() === 'from');
-    if (billedByIndex >= 0 && billedByIndex + 1 < lines.length) {
-      vendorName = lines[billedByIndex + 1].substring(0, 40);
-    } else if (lines.length > 0) {
-      const startIdx = lines[0].toLowerCase().includes('invoice') && lines.length > 1 ? 1 : 0;
-      vendorName = lines[startIdx].substring(0, 40);
+// Understands 12 Nov 2026, Nov 12, 2026, 2026-11-12 and Indian day-first 12/11/2026 or 12-11-26.
+// A date written right after the word "date" wins over other dates (due date, PO date ...).
+function extractInvoiceDate(text) {
+  const patterns = [
+    [new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?[\\s,.\\-/]+${MONTH_RE}[\\s,.\\-/]+(\\d{2,4})\\b`, 'ig'), (m) => isoDateOrNull(m[3], MONTHS[m[2].toLowerCase()], m[1])],
+    [new RegExp(`\\b${MONTH_RE}\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s+(\\d{4})\\b`, 'ig'), (m) => isoDateOrNull(m[3], MONTHS[m[1].toLowerCase()], m[2])],
+    [/\b(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})\b/g, (m) => isoDateOrNull(m[1], m[2], m[3])],
+    [/\b(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{2,4})\b/g, (m) => isoDateOrNull(m[3], m[2], m[1])],
+  ];
+  const found = [];
+  for (const [re, toIso] of patterns) {
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const iso = toIso(m);
+      if (iso) found.push({ iso, at: m.index });
     }
   }
+  if (!found.length) return null;
+  found.sort((a, b) => a.at - b.at);
+  const labelled = found.find(({ at }) => {
+    const before = text.slice(Math.max(0, at - 14), at);
+    return /date\W{0,4}$/i.test(before) && !/due\s*date\W{0,4}$/i.test(before);
+  });
+  return (labelled || found[0]).iso;
+}
+
+// Amounts need a decimal part, a thousands separator or 3+ digits, so a stray "1" (a row number) is never read as money
+const AMOUNT_RE = /(?:rs\.?|inr|₹)?\s*((?:\d{1,3}(?:,\d{2,3})+|\d{3,})(?:\.\d{1,2})?|\d+\.\d{2})\b/i;
+
+function amountOnLine(line) {
+  const m = line.match(AMOUNT_RE);
+  return m ? parseFloat(m[1].replace(/,/g, '')) : null;
+}
+
+// Returns the base amount (before GST) when the invoice shows one, otherwise the total
+function extractInvoiceAmount(text) {
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+  const firstAmount = (test) => {
+    for (const line of lines) {
+      if (test(line)) { const a = amountOnLine(line); if (a) return a; }
+    }
+    return null;
+  };
+  const base = firstAmount((l) => /sub\s*-?\s*total|taxable\s*(value|amount)|base\s*amount|amount\s*before\s*tax/i.test(l));
+  if (base) return { amount: base, basis: 'base' };
+  const total = firstAmount((l) => /(grand\s*)?total|amount\s*payable|net\s*payable|balance\s*due/i.test(l) && !/in\s*words/i.test(l));
+  if (total) return { amount: total, basis: 'total' };
+  return null;
+}
+
+function extractVendorName(lines) {
+  const clean = (s) => s
+    .replace(/\s+(tax\s+)?invoice\b.*$/i, '')     // "Test Studio  INVOICE   Invoice No.: 12"
+    .replace(/\s+(invoice\s*(no|number|#)|date|gstin?)\b.*$/i, '')
+    .replace(/^(billed by|from|seller|sold by)\s*:?\s*/i, '')
+    .trim().substring(0, 60);
+  const isLabelOnly = (l) => /^(tax\s+)?invoice$/i.test(l) || /^(original|duplicate|copy|for recipient)/i.test(l);
+
+  const labelled = lines.find((l) => /^(billed by|from|seller|sold by)\s*:\s*\S/i.test(l));
+  if (labelled) return clean(labelled) || null;
+  const idx = lines.findIndex((l) => /^(billed by|from|seller|sold by)\s*:?$/i.test(l));
+  if (idx >= 0 && lines[idx + 1]) return clean(lines[idx + 1]) || null;
+
+  const first = lines.find((l) => !isLabelOnly(l) && /[a-z]{3}/i.test(l));
+  return first ? clean(first) || null : null;
+}
+
+// Regex-based text parsing heuristic for fallback OCR. Confidence reflects how many fields were found.
+function parseRawInvoiceText(text, originalFilename) {
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+  const gstMatch = text.match(/\b\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d]Z[A-Z\d]\b/);
+  const found = extractInvoiceAmount(text);
+  const invoiceDate = extractInvoiceDate(text);
+  const vendorName = extractVendorName(lines);
+
+  let confidence = 20;
+  if (found) confidence += 25;
+  if (invoiceDate) confidence += 15;
+  if (vendorName) confidence += 15;
+  if (gstMatch) confidence += 10;
 
   return {
-    amount,
+    amount: found ? found.amount : null,
     vendorName,
     invoiceDate,
-    gstNumber,
+    gstNumber: gstMatch ? gstMatch[0] : null,
     purpose: `Extracted from ${originalFilename}`,
-    confidence: 60,
+    confidence: Math.min(confidence, 85),
     engine: 'Tesseract OCR (Local Fallback)'
   };
 }
@@ -2150,9 +2207,9 @@ async function processInvoiceOCR(filePath, originalFilename, mimeType) {
       logger.info({ filename: originalFilename, result }, 'Gemini OCR extraction completed.');
       return {
         success: true,
-        extracted_amount: result.amount || 1000,
-        vendor_name: result.vendorName || 'Unknown Vendor',
-        invoice_date: result.invoiceDate || new Date().toISOString().split('T')[0],
+        extracted_amount: Number(result.amount) || 0,
+        vendor_name: result.vendorName || '',
+        invoice_date: result.invoiceDate || '',
         gst_number: result.gstNumber || null,
         purpose: result.purpose || `Vendor Invoice: ${originalFilename}`,
         ocr_confidence: result.confidence || 90,
@@ -2173,9 +2230,9 @@ async function processInvoiceOCR(filePath, originalFilename, mimeType) {
         const parsed = parseRawInvoiceText(text, originalFilename);
         return {
           success: true,
-          extracted_amount: parsed.amount,
-          vendor_name: parsed.vendorName,
-          invoice_date: parsed.invoiceDate,
+          extracted_amount: parsed.amount || 0,
+          vendor_name: parsed.vendorName || '',
+          invoice_date: parsed.invoiceDate || '',
           gst_number: parsed.gstNumber,
           purpose: parsed.purpose,
           ocr_confidence: parsed.confidence,
@@ -2203,9 +2260,9 @@ async function processInvoiceOCR(filePath, originalFilename, mimeType) {
         const parsed = parseRawInvoiceText(text, originalFilename);
         return {
           success: true,
-          extracted_amount: parsed.amount,
-          vendor_name: parsed.vendorName,
-          invoice_date: parsed.invoiceDate,
+          extracted_amount: parsed.amount || 0,
+          vendor_name: parsed.vendorName || '',
+          invoice_date: parsed.invoiceDate || '',
           gst_number: parsed.gstNumber,
           purpose: parsed.purpose,
           ocr_confidence: parsed.confidence,
@@ -2217,19 +2274,18 @@ async function processInvoiceOCR(filePath, originalFilename, mimeType) {
     }
   }
 
-  // ── OPTION D: Heuristic File Metadata Fallback ──
-  logger.warn('All OCR pipelines failed/disabled. Falling back to heuristic defaults.');
-  const baseAmount = (fileBuffer.length % 9000) + 1000;
-  const amount = Math.round(baseAmount / 10) * 10;
+  // ── OPTION D: nothing could read the file ──
+  // Return blanks (not an invented amount) so the partner types the details in themselves.
+  logger.warn('All OCR pipelines failed/disabled. Returning empty extraction.');
   return {
     success: true,
-    extracted_amount: amount,
-    vendor_name: 'Unknown Vendor (OCR Failed)',
-    invoice_date: new Date().toISOString().split('T')[0],
+    extracted_amount: 0,
+    vendor_name: '',
+    invoice_date: '',
     gst_number: null,
-    purpose: `Vendor Invoice: ${originalFilename} (AI/OCR simulation fallback)`,
-    ocr_confidence: 30,
-    ocr_engine: 'Simulation Fallback'
+    purpose: '',
+    ocr_confidence: 0,
+    ocr_engine: 'None (could not read this file)'
   };
 }
 

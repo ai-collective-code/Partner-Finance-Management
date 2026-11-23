@@ -12,7 +12,7 @@ import { useApi } from '../hooks/useApi';
 import jsPDF from 'jspdf';
 import { PageHeader, StatCard, ToneChip, EmptyState, avatarColor } from '../components/ui';
 import { tokens, tones } from '../theme';
-import { formatDate } from '../utils/format';
+import { formatDate, localToday } from '../utils/format';
 import { MOODS } from './WorksheetForm';
 
 const empShort = (id = '') => String(id).split('_').pop().slice(0, 8);
@@ -113,7 +113,7 @@ const WorksheetAdmin = () => {
       y += 7;
     });
 
-    const filename = `work_report_${new Date().toISOString().split('T')[0]}${filterEmployee !== 'all' ? `_${empShort(filterEmployee)}` : ''}.pdf`;
+    const filename = `work_report_${localToday()}${filterEmployee !== 'all' ? `_${empShort(filterEmployee)}` : ''}.pdf`;
     doc.save(filename);
   };
 
