@@ -12,6 +12,7 @@ import FinanceReview from './pages/FinanceReview';
 import WorksheetForm from './pages/WorksheetForm';
 import WorksheetAdmin from './pages/WorksheetAdmin';
 import Billing from './pages/Billing';
+import ProjectProfit from './pages/ProjectProfit';
 import { TechDashboard, ContentDashboard } from './pages/VerifierDashboard';
 import VendorLogin from './pages/VendorLogin';
 import EmployeeLogin from './pages/EmployeeLogin';
@@ -94,6 +95,7 @@ function AuthenticatedLayout() {
               <Route path="/finance" element={<FinanceReview />} />
               <Route path="/worksheets-admin" element={<WorksheetAdmin />} />
               <Route path="/billing" element={<Billing />} />
+              <Route path="/project-profit" element={<ProjectProfit />} />
               <Route path="/tech-dashboard" element={<TechDashboard />} />
               <Route path="/content-dashboard" element={<ContentDashboard />} />
             </Routes>

@@ -18,6 +18,7 @@ import {
   ArrowOutwardRounded,
   UploadFileRounded,
   RequestQuoteRounded,
+  TrendingUpRounded,
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useSelector, useDispatch } from 'react-redux';
@@ -53,6 +54,7 @@ export const NAV_GROUPS = [
   {
     label: 'Finance',
     items: [
+      { text: 'Project profit', icon: <TrendingUpRounded />, path: '/project-profit', roles: ['FIN', 'OWN', 'ADM'] },
       { text: 'Invoices & estimates', icon: <ReceiptLongRounded />, path: '/billing', roles: ['FIN', 'OWN', 'ADM'] },
       { text: 'Subscriptions', icon: <EventRepeatRounded />, path: '/subscriptions', roles: ['FIN', 'OWN', 'ADM'] },
     ],
@@ -72,6 +74,7 @@ export const PAGE_TITLES = {
   '/': 'Dashboard',
   '/submit': 'New request',
   '/finance': 'Approvals',
+  '/project-profit': 'Project profit',
   '/billing': 'Invoices & estimates',
   '/subscriptions': 'Subscriptions',
   '/employee-dashboard': 'Employee queries',

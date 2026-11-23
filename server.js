@@ -414,6 +414,10 @@ async function initPostgres(pgConfig) {
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )`);
   await pool.query('CREATE INDEX IF NOT EXISTS idx_billing_type ON billing_docs(doc_type)');
+  // Advance / final invoices: see BILLING_STAGES
+  for (const col of ['billing_stage TEXT', 'advance_amount DOUBLE PRECISION', 'balance_due DOUBLE PRECISION', 'adjusted_advances TEXT', 'adjusted_in TEXT']) {
+    await pool.query(`ALTER TABLE billing_docs ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
 
   await pool.query(`CREATE TABLE IF NOT EXISTS invoice_codes (
     code TEXT PRIMARY KEY,
@@ -664,6 +668,9 @@ function initSQLite() {
         created_at TEXT DEFAULT (datetime('now'))
       )`);
       sqliteDb.run('CREATE INDEX IF NOT EXISTS idx_billing_type ON billing_docs(doc_type)');
+      for (const col of ['billing_stage TEXT', 'advance_amount REAL', 'balance_due REAL', 'adjusted_advances TEXT', 'adjusted_in TEXT']) {
+        sqliteDb.run(`ALTER TABLE billing_docs ADD COLUMN ${col}`, () => {});
+      }
 
       sqliteDb.run(`CREATE TABLE IF NOT EXISTS invoice_codes (
         code TEXT PRIMARY KEY,
@@ -2464,6 +2471,11 @@ const BILLING_DOC_TYPES = {
 const BILLING_TAX_RATES = [0, 5, 12, 18, 28];
 const BILLING_STATUSES = ['Issued', 'Sent', 'Accepted', 'Paid', 'Cancelled'];
 const BILLING_ROLES = ['FIN', 'OWN', 'ADM'];
+// A Tax Invoice can be for the full amount, an advance, or the final bill after advances:
+//   ADVANCE  no GST; recorded so the final invoice can deduct it
+//   FINAL    GST on the full project value, then less the project's open advance invoices = balance due
+// An advance is adjusted in at most one final invoice (adjusted_in); cancelling that final frees it again.
+const BILLING_STAGES = { FULL: 'Full invoice', ADVANCE: 'Advance invoice', FINAL: 'Final invoice' };
 
 const billingCompany = () => ({
   name: process.env.BILLING_COMPANY_NAME || 'AI Collective',
@@ -2542,13 +2554,27 @@ const billingDocSchema = z.object({
   taxMode: z.enum(['CGST_SGST', 'IGST', 'NONE']),
   taxRate: z.coerce.number().refine(r => BILLING_TAX_RATES.includes(r), 'GST rate must be 0, 5, 12, 18 or 28'),
   notes: z.string().max(2000).optional(),
+  stage: z.enum(Object.keys(BILLING_STAGES)).optional(),
+  advanceIds: z.array(z.string().max(64)).max(20).optional(),
 });
 
 function formatBillingRow(row) {
   if (!row) return row;
   let items = [];
   try { items = JSON.parse(row.items || '[]'); } catch { /* keep empty */ }
-  return { ...row, items };
+  let adjusted_advances = [];
+  try { adjusted_advances = JSON.parse(row.adjusted_advances || '[]'); } catch { /* keep empty */ }
+  return { ...row, items, adjusted_advances, billing_stage: row.billing_stage || 'FULL' };
+}
+
+// Advance invoices of a project that are not cancelled and not yet deducted in a final invoice
+function openAdvances(projectId) {
+  return dbAllAsync(
+    `SELECT id, doc_number, issue_date, total FROM billing_docs
+     WHERE project_id = ? AND doc_type = 'INV' AND billing_stage = 'ADVANCE' AND status != 'Cancelled' AND adjusted_in IS NULL
+     ORDER BY issue_date, created_at`,
+    [projectId]
+  );
 }
 
 // Number for a new billing document. Tax Invoices take the next number from the single invoice
@@ -2570,11 +2596,12 @@ async function insertBillingDoc(fields) {
       await dbRunAsync(
         `INSERT INTO billing_docs (id, doc_type, doc_number, project_id, project_code, project_name, client_name, client_address,
           client_gstin, client_state, client_email, client_phone, issue_date, due_date, items, tax_mode, tax_rate, subtotal,
-          tax_amount, total, notes, status, source_id, created_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          tax_amount, total, notes, status, source_id, created_by, created_at, billing_stage, advance_amount, balance_due, adjusted_advances)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [row.id, row.doc_type, row.doc_number, row.project_id, row.project_code, row.project_name, row.client_name, row.client_address,
           row.client_gstin, row.client_state, row.client_email, row.client_phone, row.issue_date, row.due_date, row.items, row.tax_mode,
-          row.tax_rate, row.subtotal, row.tax_amount, row.total, row.notes, row.status, row.source_id || null, row.created_by, row.created_at]
+          row.tax_rate, row.subtotal, row.tax_amount, row.total, row.notes, row.status, row.source_id || null, row.created_by, row.created_at,
+          row.billing_stage || 'FULL', row.advance_amount ?? null, row.balance_due ?? null, row.adjusted_advances || null]
       );
       return formatBillingRow(row);
     } catch (err) {
@@ -2592,7 +2619,17 @@ app.get('/api/billing/config', authenticateToken, requireRole(...BILLING_ROLES),
     docTypes: Object.entries(BILLING_DOC_TYPES).map(([code, label]) => ({ code, label })),
     taxRates: BILLING_TAX_RATES,
     statuses: BILLING_STATUSES,
+    stages: Object.entries(BILLING_STAGES).map(([code, label]) => ({ code, label })),
   });
+});
+
+// Open advance invoices of a project, for the final invoice to deduct
+app.get('/api/billing/advances', authenticateToken, requireRole(...BILLING_ROLES), async (req, res, next) => {
+  try {
+    const projectId = String(req.query.projectId || '');
+    if (!projectId) return res.status(400).json({ error: 'projectId is required' });
+    res.json(await openAdvances(projectId));
+  } catch (err) { next(err); }
 });
 
 // Preview of the number the next document would get (only reserved on create)
@@ -2645,7 +2682,26 @@ app.post('/api/billing/docs', authenticateToken, requireRole(...BILLING_ROLES), 
       return res.status(400).json({ error: 'Pick a project or create a new one (needed for the AiC code)' });
     }
 
-    const t = computeTotals(b.items, b.taxMode, b.taxRate);
+    const stage = b.docType === 'INV' ? (b.stage || 'FULL') : 'FULL';
+    if (stage === 'FINAL' && !b.projectId) {
+      return res.status(400).json({ error: 'A final invoice needs an existing project, so its advance invoices can be found.' });
+    }
+    // Advance invoices carry no GST; GST is charged on the full value in the final invoice
+    const taxMode = stage === 'ADVANCE' ? 'NONE' : b.taxMode;
+    const t = computeTotals(b.items, taxMode, stage === 'ADVANCE' ? 0 : b.taxRate);
+
+    let advances = [];
+    if (stage === 'FINAL') {
+      const ids = [...new Set(b.advanceIds || [])];
+      advances = (await openAdvances(project.id)).filter(a => ids.includes(a.id));
+      if (advances.length !== ids.length) {
+        return res.status(409).json({ error: 'One of the advance invoices was cancelled or already deducted in another final invoice. Reload and try again.' });
+      }
+    }
+    const advanceAmount = round2(advances.reduce((s, a) => s + Number(a.total || 0), 0));
+    if (advanceAmount > t.total) {
+      return res.status(400).json({ error: `The advances (Rs. ${advanceAmount}) are more than this invoice's total (Rs. ${t.total}).` });
+    }
     const doc = await insertBillingDoc({
       doc_type: b.docType,
       project_id: project.id,
@@ -2660,15 +2716,24 @@ app.post('/api/billing/docs', authenticateToken, requireRole(...BILLING_ROLES), 
       issue_date: b.issueDate,
       due_date: b.dueDate || null,
       items: JSON.stringify(t.lines),
-      tax_mode: b.taxMode,
+      tax_mode: taxMode,
       tax_rate: t.taxRate,
       subtotal: t.subtotal,
       tax_amount: t.taxAmount,
       total: t.total,
       notes: b.notes || null,
       created_by: req.user.id,
+      billing_stage: stage,
+      advance_amount: stage === 'FINAL' ? advanceAmount : null,
+      balance_due: stage === 'FINAL' ? round2(t.total - advanceAmount) : null,
+      adjusted_advances: stage === 'FINAL'
+        ? JSON.stringify(advances.map(a => ({ id: a.id, doc_number: a.doc_number, issue_date: a.issue_date, amount: round2(a.total) })))
+        : null,
     });
-    logger.info({ id: doc.id, number: doc.doc_number, code: doc.project_code, by: req.user.id }, 'Billing document created');
+    for (const a of advances) {
+      await dbRunAsync('UPDATE billing_docs SET adjusted_in = ? WHERE id = ? AND adjusted_in IS NULL', [doc.id, a.id]);
+    }
+    logger.info({ id: doc.id, number: doc.doc_number, code: doc.project_code, stage, by: req.user.id }, 'Billing document created');
     res.json(doc);
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
@@ -2689,7 +2754,10 @@ app.post('/api/billing/docs/:id/convert', authenticateToken, requireRole(...BILL
     const d = new Date();
     const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     const { id, doc_number, status, created_at, created_by, ...fields } = src; // eslint-disable-line no-unused-vars
-    const doc = await insertBillingDoc({ ...fields, doc_type: 'INV', issue_date: today, due_date: null, source_id: src.id, created_by: req.user.id });
+    const doc = await insertBillingDoc({
+      ...fields, doc_type: 'INV', issue_date: today, due_date: null, source_id: src.id, created_by: req.user.id,
+      billing_stage: 'FULL', advance_amount: null, balance_due: null, adjusted_advances: null,
+    });
     await dbRunAsync('UPDATE billing_docs SET status = ? WHERE id = ?', ['Accepted', src.id]);
     logger.info({ from: src.doc_number, to: doc.doc_number, by: req.user.id }, 'Billing document converted to invoice');
     res.json(doc);
@@ -2703,10 +2771,135 @@ app.put('/api/billing/docs/:id/status', authenticateToken, requireRole(...BILLIN
   try {
     const status = String((req.body || {}).status || '');
     if (!BILLING_STATUSES.includes(status)) return res.status(400).json({ error: `Status must be one of: ${BILLING_STATUSES.join(', ')}` });
-    const row = await dbGetAsync('SELECT id FROM billing_docs WHERE id = ?', [req.params.id]);
+    const row = await dbGetAsync('SELECT id, status, billing_stage, adjusted_in FROM billing_docs WHERE id = ?', [req.params.id]);
     if (!row) return res.status(404).json({ error: 'Document not found' });
+    if (row.billing_stage === 'ADVANCE' && row.adjusted_in && status === 'Cancelled') {
+      const fin = await dbGetAsync('SELECT doc_number FROM billing_docs WHERE id = ?', [row.adjusted_in]);
+      return res.status(400).json({ error: `This advance is deducted in final invoice ${fin ? fin.doc_number : row.adjusted_in}. Cancel that invoice first.` });
+    }
+    if (row.billing_stage === 'FINAL' && row.status === 'Cancelled' && status !== 'Cancelled') {
+      return res.status(400).json({ error: 'A cancelled final invoice cannot be reopened, because its advances were released. Create a new final invoice instead.' });
+    }
     await dbRunAsync('UPDATE billing_docs SET status = ? WHERE id = ?', [status, req.params.id]);
+    // Cancelling a final invoice frees its advances for the next final invoice
+    if (row.billing_stage === 'FINAL' && status === 'Cancelled') {
+      await dbRunAsync('UPDATE billing_docs SET adjusted_in = NULL WHERE adjusted_in = ?', [req.params.id]);
+    }
     res.json({ id: req.params.id, status });
+  } catch (err) { next(err); }
+});
+
+// ══════════ PROJECT PROFIT & GST ══════════
+// One AiC code ties a project's client invoices (billing_docs) to the partner bills paid against it
+// (requests, whose metadata.projectName is "Name (CODE)"). Profit is worked out before GST: GST
+// collected from clients and GST paid to partners pass through to the government, so they are
+// reported separately (output GST, input GST, net payable) for the GST return.
+const REPORT_ROLES = ['FIN', 'OWN', 'ADM'];
+const codeFromProjectName = (s) => { const m = String(s || '').match(/\(([^()]+)\)\s*$/); return m ? m[1].trim() : ''; };
+const nameFromProjectName = (s) => String(s || '').replace(/\s*\([^()]*\)\s*$/, '').trim();
+const isoDay = (v) => String(v || '').slice(0, 10);
+function splitGst(amount, mode) {
+  const a = round2(amount);
+  if (mode === 'IGST') return { cgst: 0, sgst: 0, igst: a };
+  const half = round2(a / 2);
+  return { cgst: half, sgst: round2(a - half), igst: 0 };
+}
+
+function summariseProject(p) {
+  const inv = p.client.filter(d => d.doc_type === 'INV');
+  // An advance that a final invoice has deducted is already inside that final's value
+  const counted = inv.filter(d => !(d.stage === 'ADVANCE' && d.adjusted_in));
+  const billed = round2(counted.reduce((s, d) => s + d.subtotal, 0));
+  const outputGst = round2(inv.reduce((s, d) => s + d.tax_amount, 0));
+  const paid = inv.filter(d => d.status === 'Paid');
+  const received = round2(paid.reduce((s, d) => s + (d.stage === 'FINAL' && d.balance_due != null ? Number(d.balance_due) : d.total), 0));
+  const advanceReceived = round2(paid.filter(d => d.stage === 'ADVANCE').reduce((s, d) => s + d.total, 0));
+  const quotes = p.client.filter(d => d.doc_type !== 'INV').sort((a, b) => String(b.issue_date).localeCompare(String(a.issue_date)));
+  const quoted = quotes.length ? quotes[0].subtotal : null;
+
+  const partnerCost = round2(p.partners.reduce((s, r) => s + r.base, 0));
+  const paidOut = round2(p.partners.filter(r => r.status === 'DSB').reduce((s, r) => s + r.total, 0));
+  const toPay = round2(p.partners.filter(r => r.status !== 'DSB').reduce((s, r) => s + r.payable, 0));
+  const inputGst = round2(p.partners.filter(r => r.gstin).reduce((s, r) => s + r.gst, 0));
+
+  const profit = round2(billed - partnerCost);
+  return {
+    quoted, billed, outputGst, received, advanceReceived,
+    partnerCost, paidOut, toPay, inputGst,
+    profit, margin: billed > 0 ? round2((profit / billed) * 100) : null,
+    cashPosition: round2(received - paidOut), // money actually in minus money actually out, GST included
+    netGst: round2(outputGst - inputGst),
+  };
+}
+
+app.get('/api/reports/project-profit', authenticateToken, requireRole(...REPORT_ROLES), async (req, res, next) => {
+  try {
+    const [projects, docs, requests] = await Promise.all([
+      dbAllAsync('SELECT id, name, code, status, partner_name, created_at FROM projects'),
+      dbAllAsync("SELECT * FROM billing_docs WHERE status != 'Cancelled'"),
+      dbAllAsync("SELECT id, amount, status, ts, metadata FROM requests WHERE deleted_at IS NULL AND status != 'REJ'"),
+    ]);
+    const byCode = new Map();
+    const entry = (code, name) => {
+      if (!byCode.has(code)) byCode.set(code, { code, name: name || code, id: null, status: null, client: [], partners: [] });
+      return byCode.get(code);
+    };
+    for (const p of projects) Object.assign(entry(p.code, p.name), { id: p.id, status: p.status, client_name: p.partner_name || '', created_at: p.created_at });
+
+    const gstLines = [];
+    for (const d of docs) {
+      if (!d.project_code) continue;
+      const stage = d.doc_type === 'INV' ? (d.billing_stage || 'FULL') : 'FULL';
+      entry(d.project_code, d.project_name).client.push({
+        id: d.id, doc_type: d.doc_type, stage, doc_number: d.doc_number, issue_date: d.issue_date, client_name: d.client_name,
+        subtotal: Number(d.subtotal) || 0, tax_amount: Number(d.tax_amount) || 0, total: Number(d.total) || 0,
+        balance_due: d.balance_due, status: d.status, adjusted_in: d.adjusted_in || null,
+      });
+      if (d.doc_type === 'INV' && Number(d.tax_amount) > 0) {
+        gstLines.push({
+          direction: 'OUTPUT', date: d.issue_date, number: d.doc_number, party: d.client_name, gstin: d.client_gstin || '',
+          project_code: d.project_code, taxable: Number(d.subtotal) || 0, tax: Number(d.tax_amount) || 0,
+          ...splitGst(d.tax_amount, d.tax_mode), claimable: true,
+        });
+      }
+    }
+
+    for (const r of requests) {
+      let m = {};
+      try { m = JSON.parse(r.metadata || '{}') || {}; } catch { /* bad metadata */ }
+      const code = codeFromProjectName(m.projectName);
+      if (!code) continue; // salary and other requests without a project
+      const gst = m.isGst ? Number(m.gstAmount) || 0 : 0;
+      const total = Number(m.totalAmount) || Number(r.amount) || 0;
+      const base = m.baseAmount != null && m.baseAmount !== '' ? Number(m.baseAmount) || 0 : round2(total - gst);
+      const gstin = String(m.gstNumber || '').trim().toUpperCase();
+      const party = m.companyName || m.vendorName || '';
+      entry(code, nameFromProjectName(m.projectName)).partners.push({
+        id: r.id, status: r.status, date: isoDay(r.ts), partner: party, role: m.department || '',
+        base: round2(base), gst: round2(gst), total: round2(total), payable: Number(r.amount) || 0, gstin,
+      });
+      if (gst > 0) {
+        gstLines.push({
+          direction: 'INPUT', date: isoDay(r.ts), number: r.id, party, gstin, project_code: code,
+          taxable: round2(base), tax: round2(gst), ...splitGst(gst, /IGST/i.test(m.gstType || '') ? 'IGST' : 'CGST_SGST'),
+          claimable: !!gstin, request_status: r.status,
+        });
+      }
+    }
+
+    const list = [...byCode.values()].map(p => ({ ...p, summary: summariseProject(p) }));
+    // Projects with money moving first, then newest
+    list.sort((a, b) => (b.summary.billed + b.summary.partnerCost) - (a.summary.billed + a.summary.partnerCost)
+      || String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    const sum = (k) => round2(list.reduce((s, p) => s + (Number(p.summary[k]) || 0), 0));
+    const totals = {
+      billed: sum('billed'), partnerCost: sum('partnerCost'), profit: sum('profit'), received: sum('received'),
+      paidOut: sum('paidOut'), toPay: sum('toPay'), outputGst: sum('outputGst'), inputGst: sum('inputGst'),
+      netGst: sum('netGst'), cashPosition: sum('cashPosition'),
+    };
+    totals.margin = totals.billed > 0 ? round2((totals.profit / totals.billed) * 100) : null;
+    gstLines.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    res.json({ projects: list, totals, gstLines });
   } catch (err) { next(err); }
 });
 

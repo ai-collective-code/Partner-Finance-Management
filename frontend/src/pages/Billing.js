@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Box, Typography, Paper, Grid, TextField, MenuItem, Button, IconButton, Alert,
   Table, TableHead, TableRow, TableCell, TableBody, TableContainer, ToggleButton, ToggleButtonGroup,
-  CircularProgress, Tooltip, Menu, InputAdornment, Skeleton,
+  CircularProgress, Tooltip, Menu, InputAdornment, Skeleton, Checkbox,
 } from '@mui/material';
 import {
   AddRounded, DeleteOutlineRounded, PictureAsPdfRounded, ReceiptLongRounded, SwapHorizRounded, MoreVertRounded, AutoAwesome,
@@ -32,6 +32,15 @@ const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 const emptyItem = () => ({ description: '', sac: '', qty: 1, rate: '' });
 
 const STATUS_TONES = { Issued: 'info', Sent: 'accent', Accepted: 'violet', Paid: 'success', Cancelled: 'danger' };
+
+// A Tax Invoice can be for the full amount, an advance (no GST), or the final bill that charges GST
+// on the full project value and deducts the advances already invoiced.
+const STAGES = [
+  { code: 'FULL', label: 'Full amount', help: 'One invoice for the whole amount, with GST.' },
+  { code: 'ADVANCE', label: 'Advance', help: 'No GST. The final invoice charges GST on the full project value and deducts this advance.' },
+  { code: 'FINAL', label: 'Final (after advance)', help: 'Enter the full project value. GST is charged on all of it, then the advances you tick are deducted.' },
+];
+const STAGE_NAMES = { ADVANCE: 'Advance invoice', FINAL: 'Final invoice' };
 const DUE_LABEL = (type) => (type === 'INV' || type === 'PI' ? 'Due date' : 'Valid until');
 
 export default function Billing() {
@@ -61,6 +70,10 @@ export default function Billing() {
   const [taxRate, setTaxRate] = useState(18);
   const [taxMode, setTaxMode] = useState('AUTO'); // AUTO picks CGST+SGST vs IGST from the client's state
   const [notes, setNotes] = useState('');
+  const [stage, setStage] = useState('FULL');
+  const [advances, setAdvances] = useState([]); // open advance invoices of the selected project
+  const [advanceIds, setAdvanceIds] = useState([]);
+  const [advancesLoading, setAdvancesLoading] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState(null);
@@ -143,16 +156,41 @@ export default function Billing() {
     }
   }, [projectId]); // eslint-disable-line
 
+  // Stages only apply to Tax Invoices
+  const invStage = docType === 'INV' ? stage : 'FULL';
+  const isFinal = invStage === 'FINAL';
+
+  // A final invoice deducts advances, which belong to an existing project
+  useEffect(() => { if (isFinal) setProjectMode('existing'); }, [isFinal]);
+
+  // Open advance invoices of the selected project; all ticked by default
+  useEffect(() => {
+    if (!isFinal || !projectId) { setAdvances([]); setAdvanceIds([]); return undefined; }
+    let cancelled = false;
+    setAdvancesLoading(true);
+    (async () => {
+      try {
+        const res = await apiFetch(`/api/billing/advances?projectId=${encodeURIComponent(projectId)}`);
+        const list = res.ok ? await res.json() : [];
+        if (!cancelled) { setAdvances(list); setAdvanceIds(list.map(a => a.id)); }
+      } catch { if (!cancelled) { setAdvances([]); setAdvanceIds([]); } } finally { if (!cancelled) setAdvancesLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [isFinal, projectId, docs]); // eslint-disable-line
+
   const companyState = (config?.company?.state || '').trim().toLowerCase();
-  const effectiveTaxMode = taxMode !== 'AUTO' ? taxMode
+  const effectiveTaxMode = invStage === 'ADVANCE' ? 'NONE'
+    : taxMode !== 'AUTO' ? taxMode
     : (client.state.trim() && client.state.trim().toLowerCase() !== companyState ? 'IGST' : 'CGST_SGST');
 
   const totals = useMemo(() => {
     const subtotal = round2(items.reduce((s, it) => s + round2((Number(it.qty) || 0) * (Number(it.rate) || 0)), 0));
     const rate = effectiveTaxMode === 'NONE' ? 0 : Number(taxRate);
     const tax = round2(subtotal * rate / 100);
-    return { subtotal, rate, tax, total: round2(subtotal + tax) };
-  }, [items, taxRate, effectiveTaxMode]);
+    const total = round2(subtotal + tax);
+    const advance = isFinal ? round2(advances.filter(a => advanceIds.includes(a.id)).reduce((s, a) => s + Number(a.total || 0), 0)) : 0;
+    return { subtotal, rate, tax, total, advance, balance: round2(total - advance) };
+  }, [items, taxRate, effectiveTaxMode, isFinal, advances, advanceIds]);
 
   const aicCode = projectMode === 'existing' ? (selectedProject?.code || '') : newCodePreview;
 
@@ -179,6 +217,10 @@ export default function Billing() {
     const cleanItems = items.filter(it => it.description.trim() || Number(it.rate));
     if (!cleanItems.length) { setResult({ type: 'error', msg: 'Add at least one item with a description and rate.' }); return; }
     if (cleanItems.some(it => !it.description.trim())) { setResult({ type: 'error', msg: 'Every item needs a description.' }); return; }
+    if (isFinal && totals.advance > totals.total) {
+      setResult({ type: 'error', msg: `The advances ticked (${money(totals.advance)}) are more than this invoice's total (${money(totals.total)}). Enter the full project value.` });
+      return;
+    }
 
     setSaving(true);
     try {
@@ -194,6 +236,8 @@ export default function Billing() {
           taxMode: effectiveTaxMode,
           taxRate: Number(taxRate),
           notes,
+          stage: invStage,
+          ...(isFinal ? { advanceIds } : {}),
         },
       });
       const data = await res.json();
@@ -203,7 +247,9 @@ export default function Billing() {
         return;
       }
       downloadBillingPdf(data, config?.company);
-      setResult({ type: 'success', msg: `${data.doc_number} created for ${data.project_code}. The PDF has downloaded.` });
+      const what = STAGE_NAMES[data.billing_stage] ? `${STAGE_NAMES[data.billing_stage]} ${data.doc_number}` : data.doc_number;
+      const balance = data.billing_stage === 'FINAL' && data.advance_amount ? ` Balance due ${money(data.balance_due)} after ${money(data.advance_amount)} advance.` : '';
+      setResult({ type: 'success', msg: `${what} created for ${data.project_code}.${balance} The PDF has downloaded.` });
       resetForm();
       setProjectMode('existing');
       loadDocs();
@@ -229,7 +275,9 @@ export default function Billing() {
   const setStatus = async (doc, status) => {
     setMenu({ anchor: null, doc: null });
     const res = await apiFetch(`/api/billing/docs/${doc.id}/status`, { method: 'PUT', body: { status } });
-    if (res.ok) loadDocs();
+    if (res.ok) { loadDocs(); return; }
+    const data = await res.json().catch(() => ({}));
+    setResult({ type: 'error', msg: data.error || 'Could not change the status' });
   };
 
   const filteredDocs = listFilter === 'ALL' ? docs : docs.filter(d => d.doc_type === listFilter);
@@ -239,8 +287,18 @@ export default function Billing() {
   const taxLines = [
     ...(effectiveTaxMode === 'CGST_SGST' ? [[`CGST @ ${totals.rate / 2}%`, round2(totals.tax / 2)], [`SGST @ ${totals.rate / 2}%`, round2(totals.tax - round2(totals.tax / 2))]] : []),
     ...(effectiveTaxMode === 'IGST' ? [[`IGST @ ${totals.rate}%`, totals.tax]] : []),
-    ...(effectiveTaxMode === 'NONE' ? [['GST', 0]] : []),
+    ...(effectiveTaxMode === 'NONE' ? [['GST', invStage === 'ADVANCE' ? 'In final invoice' : 0]] : []),
   ];
+  // Summary rows; strings are shown as-is
+  const summaryRows = [
+    ['Subtotal', totals.subtotal],
+    ...taxLines,
+    ...(isFinal && totals.advance ? [['Invoice total', totals.total], ['Less advances', -totals.advance]] : []),
+  ];
+  const headline = isFinal && totals.advance
+    ? { label: 'Balance due', value: totals.balance }
+    : { label: `${STAGE_NAMES[invStage] || typeLabel(docType)} total`, value: totals.total };
+  const submitLabel = STAGE_NAMES[invStage] ? `Create ${STAGE_NAMES[invStage].toLowerCase()}` : `Create ${typeLabel(docType).toLowerCase()}`;
   const projectDone = projectMode === 'existing' ? !!projectId : !!(np.name.trim() && CLIENT_RE.test(np.clientCode) && TAG_RE.test(np.projectTag));
   const itemsDone = items.some(it => it.description.trim() && Number(it.rate) > 0);
 
@@ -276,6 +334,18 @@ export default function Billing() {
                 <Grid item xs={6} sm={4}>
                   <TextField fullWidth type="date" label={DUE_LABEL(docType)} InputLabelProps={{ shrink: true }} value={dueDate} onChange={e => setDueDate(e.target.value)} />
                 </Grid>
+                {docType === 'INV' && (
+                  <Grid item xs={12}>
+                    <Typography variant="caption" component="div" sx={{ color: 'text.secondary', mb: 1 }}>Invoice for</Typography>
+                    <ToggleButtonGroup size="small" exclusive value={stage} onChange={(_, v) => v && setStage(v)} aria-label="Invoice for"
+                      sx={{ flexWrap: 'wrap' }}>
+                      {STAGES.map(s => <ToggleButton key={s.code} value={s.code} sx={{ whiteSpace: 'nowrap' }}>{s.label}</ToggleButton>)}
+                    </ToggleButtonGroup>
+                    <Typography variant="caption" component="div" sx={{ color: 'text.disabled', mt: 1 }}>
+                      {STAGES.find(s => s.code === stage)?.help}
+                    </Typography>
+                  </Grid>
+                )}
               </Grid>
             </SectionCard>
 
@@ -286,7 +356,7 @@ export default function Billing() {
               badge={
                 <ToggleButtonGroup size="small" exclusive value={projectMode} onChange={(_, v) => v && setProjectMode(v)} sx={{ ml: 'auto' }}>
                   <ToggleButton value="existing">Existing</ToggleButton>
-                  <ToggleButton value="new">New</ToggleButton>
+                  <ToggleButton value="new" disabled={isFinal} title={isFinal ? 'A final invoice deducts advances of an existing project' : undefined}>New</ToggleButton>
                 </ToggleButtonGroup>
               }
             >
@@ -385,12 +455,40 @@ export default function Billing() {
                 Add item
               </Button>
 
+              {isFinal && (
+                <Box sx={{ mt: 3, pt: 3, borderTop: `1px solid ${tokens.border}` }}>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>Advances to deduct</Typography>
+                  <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 1.25 }}>
+                    Advance invoices of this project that aren't in a final invoice yet. Enter the full project value above; these are taken off after GST.
+                  </Typography>
+                  {!projectId && <Typography variant="body2" sx={{ color: 'text.disabled' }}>Pick a project to see its advances.</Typography>}
+                  {projectId && advancesLoading && <Skeleton height={44} />}
+                  {projectId && !advancesLoading && advances.length === 0 && (
+                    <Typography variant="body2" sx={{ color: 'text.disabled' }}>No open advance invoices for this project. This will be a normal invoice.</Typography>
+                  )}
+                  {projectId && !advancesLoading && advances.map(a => (
+                    <Box key={a.id} component="label" sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.5, cursor: 'pointer' }}>
+                      <Checkbox size="small" checked={advanceIds.includes(a.id)}
+                        onChange={e => setAdvanceIds(ids => (e.target.checked ? [...ids, a.id] : ids.filter(x => x !== a.id)))} />
+                      <Code>{a.doc_number}</Code>
+                      <Typography variant="body2" sx={{ color: 'text.secondary' }}>{formatDate(a.issue_date)}</Typography>
+                      <Typography variant="body2" sx={{ ml: 'auto', fontWeight: 560, fontFeatureSettings: '"tnum"' }}>{money(a.total)}</Typography>
+                    </Box>
+                  ))}
+                </Box>
+              )}
+
               <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2, mt: 3, pt: 3, borderTop: `1px solid ${tokens.border}` }}>
-                <TextField select fullWidth label="GST rate" value={taxRate} onChange={e => setTaxRate(e.target.value)}>
+                {invStage === 'ADVANCE' && (
+                  <Alert severity="info" sx={{ gridColumn: '1 / -1' }}>
+                    No GST on an advance invoice. Make the final invoice for the full project value when the work is done: it charges GST on all of it and deducts this advance.
+                  </Alert>
+                )}
+                <TextField select fullWidth label="GST rate" value={taxRate} onChange={e => setTaxRate(e.target.value)} disabled={invStage === 'ADVANCE'}>
                   {(config?.taxRates || [0, 5, 12, 18, 28]).map(r => <MenuItem key={r} value={r}>{r}%</MenuItem>)}
                 </TextField>
-                <TextField select fullWidth label="GST type" value={taxMode} onChange={e => setTaxMode(e.target.value)}
-                  helperText={taxMode === 'AUTO' ? `Using ${effectiveTaxMode === 'IGST' ? 'IGST' : 'CGST + SGST'} from the client's state` : ' '}>
+                <TextField select fullWidth label="GST type" value={taxMode} onChange={e => setTaxMode(e.target.value)} disabled={invStage === 'ADVANCE'}
+                  helperText={invStage === 'ADVANCE' ? 'Charged in the final invoice' : taxMode === 'AUTO' ? `Using ${effectiveTaxMode === 'IGST' ? 'IGST' : 'CGST + SGST'} from the client's state` : ' '}>
                   <MenuItem value="AUTO">Automatic</MenuItem>
                   <MenuItem value="CGST_SGST">CGST + SGST</MenuItem>
                   <MenuItem value="IGST">IGST</MenuItem>
@@ -407,15 +505,17 @@ export default function Billing() {
             <Paper sx={{ p: 2.75, overflow: 'hidden', position: 'relative' }}>
               <Box aria-hidden sx={{ position: 'absolute', inset: 0, background: 'radial-gradient(400px 180px at 100% 0%, rgba(99,102,241,0.16), transparent 70%)', pointerEvents: 'none' }} />
               <Box sx={{ position: 'relative' }}>
-                <Typography variant="caption" sx={{ color: 'text.secondary' }}>{typeLabel(docType)} total</Typography>
+                <Typography variant="caption" sx={{ color: 'text.secondary' }}>{headline.label}</Typography>
                 <Typography sx={{ fontSize: 34, fontWeight: 650, letterSpacing: '-0.035em', lineHeight: 1.15, mt: 0.25, fontFeatureSettings: '"tnum"' }}>
-                  {money(totals.total)}
+                  {money(headline.value)}
                 </Typography>
                 <Box sx={{ display: 'grid', gap: 0.75, mt: 2, pt: 2, borderTop: `1px solid ${tokens.border}` }}>
-                  {[['Subtotal', totals.subtotal], ...taxLines].map(([k, v]) => (
+                  {summaryRows.map(([k, v]) => (
                     <Box key={k} sx={{ display: 'flex', justifyContent: 'space-between', gap: 2 }}>
                       <Typography variant="body2" sx={{ color: 'text.secondary' }}>{k}</Typography>
-                      <Typography variant="body2" sx={{ fontWeight: 520, fontFeatureSettings: '"tnum"' }}>{money(v)}</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 520, fontFeatureSettings: '"tnum"', color: typeof v === 'string' ? 'text.disabled' : undefined }}>
+                        {typeof v === 'string' ? v : v < 0 ? `− ${money(-v)}` : money(v)}
+                      </Typography>
                     </Box>
                   ))}
                 </Box>
@@ -436,7 +536,7 @@ export default function Billing() {
             <Box>
               <Button type="submit" variant="contained" size="large" fullWidth disabled={saving}
                 startIcon={saving ? <CircularProgress size={18} color="inherit" /> : <PictureAsPdfRounded />} sx={{ minHeight: 50, fontSize: 15 }}>
-                {saving ? 'Generating…' : `Create ${typeLabel(docType).toLowerCase()}`}
+                {saving ? 'Generating…' : submitLabel}
               </Button>
               <Typography variant="caption" sx={{ display: 'block', textAlign: 'center', mt: 1.25, color: 'text.disabled' }}>
                 Saves it and downloads the PDF
@@ -486,13 +586,23 @@ export default function Billing() {
                     <TableRow key={d.id} hover>
                       <TableCell>
                         <Code>{d.doc_number}</Code>
-                        <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block' }}>{typeLabel(d.doc_type)} · {d.project_code}</Typography>
+                        <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block' }}>
+                          {(d.doc_type === 'INV' && STAGE_NAMES[d.billing_stage]) || typeLabel(d.doc_type)} · {d.project_code}
+                        </Typography>
                       </TableCell>
                       <TableCell sx={{ maxWidth: 220 }}>
                         <Typography variant="body2" noWrap>{d.client_name}</Typography>
                       </TableCell>
                       <TableCell sx={{ whiteSpace: 'nowrap', display: { xs: 'none', lg: 'table-cell' }, color: 'text.secondary' }}>{formatDate(d.issue_date)}</TableCell>
-                      <TableCell align="right" sx={{ fontWeight: 600, fontFeatureSettings: '"tnum"', whiteSpace: 'nowrap' }}>{money(d.total)}</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 600, fontFeatureSettings: '"tnum"', whiteSpace: 'nowrap' }}>
+                        {money(d.total)}
+                        {d.billing_stage === 'FINAL' && Number(d.advance_amount) > 0 && (
+                          <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', fontWeight: 400 }}>Balance {money(d.balance_due)}</Typography>
+                        )}
+                        {d.billing_stage === 'ADVANCE' && d.adjusted_in && (
+                          <Typography variant="caption" sx={{ display: 'block', color: 'text.disabled', fontWeight: 400 }}>Deducted in final</Typography>
+                        )}
+                      </TableCell>
                       <TableCell><ToneChip tone={STATUS_TONES[d.status] || 'neutral'} label={d.status} /></TableCell>
                       <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
                         <Tooltip title="Download PDF">
