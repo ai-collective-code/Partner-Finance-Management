@@ -1,14 +1,17 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
-  Box, Typography, Paper, Grid, TextField, MenuItem, Button, IconButton, Alert, Chip, Divider,
-  Table, TableHead, TableRow, TableCell, TableBody, Tabs, Tab, ToggleButton, ToggleButtonGroup,
-  CircularProgress, Tooltip, Menu,
+  Box, Typography, Paper, Grid, TextField, MenuItem, Button, IconButton, Alert,
+  Table, TableHead, TableRow, TableCell, TableBody, TableContainer, ToggleButton, ToggleButtonGroup,
+  CircularProgress, Tooltip, Menu, InputAdornment, Skeleton,
 } from '@mui/material';
 import {
-  Add, Delete, PictureAsPdf, ReceiptLong, SwapHoriz, MoreVert, AutoAwesome,
+  AddRounded, DeleteOutlineRounded, PictureAsPdfRounded, ReceiptLongRounded, SwapHorizRounded, MoreVertRounded, AutoAwesome,
 } from '@mui/icons-material';
 import { useApi } from '../hooks/useApi';
 import { downloadBillingPdf, formatINR } from '../utils/generateBillingPdf';
+import { PageHeader, SectionCard, ToneChip, EmptyState, Code } from '../components/ui';
+import { tokens, tones } from '../theme';
+import { formatDate } from '../utils/format';
 
 // Today's date as YYYY-MM-DD in the user's local time zone
 const todayLocal = (offsetDays = 0) => {
@@ -28,10 +31,8 @@ const CLIENT_RE = /^[A-Z]{2,5}$/;
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 const emptyItem = () => ({ description: '', sac: '', qty: 1, rate: '' });
 
-const STATUS_COLORS = { Issued: 'info', Sent: 'primary', Accepted: 'secondary', Paid: 'success', Cancelled: 'error' };
+const STATUS_TONES = { Issued: 'info', Sent: 'accent', Accepted: 'violet', Paid: 'success', Cancelled: 'danger' };
 const DUE_LABEL = (type) => (type === 'INV' || type === 'PI' ? 'Due date' : 'Valid until');
-
-const paperSx = { p: { xs: 2, sm: 3 }, bgcolor: '#111827', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 3 };
 
 export default function Billing() {
   const { apiFetch } = useApi();
@@ -202,13 +203,13 @@ export default function Billing() {
         return;
       }
       downloadBillingPdf(data, config?.company);
-      setResult({ type: 'success', msg: `${data.doc_number} created for ${data.project_code} — PDF downloaded.` });
+      setResult({ type: 'success', msg: `${data.doc_number} created for ${data.project_code}. The PDF has downloaded.` });
       resetForm();
       setProjectMode('existing');
       loadDocs();
       loadProjects();
     } catch (err) {
-      setResult({ type: 'error', msg: 'Network error — please try again.' });
+      setResult({ type: 'error', msg: 'Network error. Please try again.' });
     } finally { setSaving(false); }
   };
 
@@ -234,289 +235,288 @@ export default function Billing() {
   const filteredDocs = listFilter === 'ALL' ? docs : docs.filter(d => d.doc_type === listFilter);
   const docTypes = config?.docTypes || [{ code: 'INV', label: 'Tax Invoice' }, { code: 'PI', label: 'Proforma Invoice' }, { code: 'EST', label: 'Estimate' }, { code: 'QUO', label: 'Quotation' }];
   const typeLabel = (code) => docTypes.find(t => t.code === code)?.label || code;
+  const money = (v) => `₹${formatINR(v)}`;
+  const taxLines = [
+    ...(effectiveTaxMode === 'CGST_SGST' ? [[`CGST @ ${totals.rate / 2}%`, round2(totals.tax / 2)], [`SGST @ ${totals.rate / 2}%`, round2(totals.tax - round2(totals.tax / 2))]] : []),
+    ...(effectiveTaxMode === 'IGST' ? [[`IGST @ ${totals.rate}%`, totals.tax]] : []),
+    ...(effectiveTaxMode === 'NONE' ? [['GST', 0]] : []),
+  ];
+  const projectDone = projectMode === 'existing' ? !!projectId : !!(np.name.trim() && CLIENT_RE.test(np.clientCode) && TAG_RE.test(np.projectTag));
+  const itemsDone = items.some(it => it.description.trim() && Number(it.rate) > 0);
 
   return (
-    <Box sx={{ maxWidth: 1200, mx: 'auto' }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 0.5 }}>
-        <ReceiptLong color="primary" />
-        <Typography variant="h5" fontWeight={700}>Invoices & Estimates</Typography>
-      </Box>
-      <Typography variant="body2" color="text.secondary" mb={2}>
-        Fill in the key details — the document number, AiC code, GST and totals are generated automatically.
-      </Typography>
+    <Box sx={{ pb: 6 }}>
+      <PageHeader
+        title="Invoices & estimates"
+        subtitle="Fill in the essentials. The document number, AiC code, GST split and totals are worked out for you."
+        actions={
+          <ToggleButtonGroup size="small" exclusive value={tab} onChange={(_, v) => v && setTab(v)} aria-label="View">
+            <ToggleButton value="create"><AddRounded sx={{ fontSize: 18, mr: 0.75 }} />Create</ToggleButton>
+            <ToggleButton value="list"><ReceiptLongRounded sx={{ fontSize: 18, mr: 0.75 }} />Documents{docs.length ? ` · ${docs.length}` : ''}</ToggleButton>
+          </ToggleButtonGroup>
+        }
+      />
 
-      <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
-        <Tab value="create" label="Create new" />
-        <Tab value="list" label={`All documents (${docs.length})`} />
-      </Tabs>
-
-      {result && <Alert severity={result.type} sx={{ mb: 2 }} onClose={() => setResult(null)}>{result.msg}</Alert>}
+      {result && <Alert severity={result.type} sx={{ mb: 3 }} onClose={() => setResult(null)}>{result.msg}</Alert>}
 
       {tab === 'create' && (
-        <Box component="form" onSubmit={handleSubmit}>
-          <Grid container spacing={2}>
-            {/* ── Document */}
-            <Grid item xs={12}>
-              <Paper sx={paperSx}>
-                <Typography fontWeight={700} mb={2}>1. Document</Typography>
+        <Box component="form" onSubmit={handleSubmit} noValidate sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'minmax(0, 1fr) 340px' }, gap: 3, alignItems: 'start' }}>
+          <Box sx={{ display: 'grid', gap: 2.5, minWidth: 0 }}>
+            {/* ── 1. Document */}
+            <SectionCard step={1} complete={!!issueDate} title="Document" description="What you're issuing, and when.">
+              <Grid container spacing={2}>
+                <Grid item xs={12} sm={4}>
+                  <TextField select fullWidth label="Type" value={docType} onChange={e => setDocType(e.target.value)}>
+                    {docTypes.map(t => <MenuItem key={t.code} value={t.code}>{t.label}</MenuItem>)}
+                  </TextField>
+                </Grid>
+                <Grid item xs={6} sm={4}>
+                  <TextField fullWidth type="date" label="Issue date" InputLabelProps={{ shrink: true }} value={issueDate} onChange={e => setIssueDate(e.target.value)} required />
+                </Grid>
+                <Grid item xs={6} sm={4}>
+                  <TextField fullWidth type="date" label={DUE_LABEL(docType)} InputLabelProps={{ shrink: true }} value={dueDate} onChange={e => setDueDate(e.target.value)} />
+                </Grid>
+              </Grid>
+            </SectionCard>
+
+            {/* ── 2. Project */}
+            <SectionCard
+              step={2} complete={projectDone} title="Project"
+              description="The project gives the document its AiC code."
+              badge={
+                <ToggleButtonGroup size="small" exclusive value={projectMode} onChange={(_, v) => v && setProjectMode(v)} sx={{ ml: 'auto' }}>
+                  <ToggleButton value="existing">Existing</ToggleButton>
+                  <ToggleButton value="new">New</ToggleButton>
+                </ToggleButtonGroup>
+              }
+            >
+              {projectMode === 'existing' ? (
+                <TextField select fullWidth label="Project" value={projectId} onChange={e => setProjectId(e.target.value)}
+                  helperText={projects.length ? ' ' : 'No active projects yet. Switch to "New" to create one.'}>
+                  {projects.map(p => (
+                    <MenuItem key={p.id} value={p.id}>
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography variant="body2" noWrap>{p.name}</Typography>
+                        <Code muted>{p.code}</Code>
+                      </Box>
+                    </MenuItem>
+                  ))}
+                </TextField>
+              ) : (
                 <Grid container spacing={2}>
-                  <Grid item xs={12} sm={4}>
-                    <TextField select fullWidth size="small" label="Type" value={docType} onChange={e => setDocType(e.target.value)}>
-                      {docTypes.map(t => <MenuItem key={t.code} value={t.code}>{t.label}</MenuItem>)}
+                  <Grid item xs={12}>
+                    <TextField fullWidth label="Project name" placeholder="Dabur Amla Bihar Ad" value={np.name} onChange={e => setNp({ ...np, name: e.target.value })} />
+                  </Grid>
+                  <Grid item xs={6} sm={3}>
+                    <TextField fullWidth label="Client code" value={np.clientCode}
+                      inputProps={{ style: { fontFamily: tokens.mono } }}
+                      error={!!np.clientCode && !CLIENT_RE.test(np.clientCode)} helperText="2–5 letters"
+                      onChange={e => { setNpTouched(t => ({ ...t, clientCode: true })); setNp({ ...np, clientCode: e.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 5) }); }} />
+                  </Grid>
+                  <Grid item xs={6} sm={3}>
+                    <TextField fullWidth label="Project tag" value={np.projectTag}
+                      inputProps={{ style: { fontFamily: tokens.mono } }}
+                      error={!!np.projectTag && !TAG_RE.test(np.projectTag)} helperText="2–6, starts with a letter"
+                      onChange={e => { setNpTouched(t => ({ ...t, projectTag: true })); setNp({ ...np, projectTag: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6) }); }} />
+                  </Grid>
+                  <Grid item xs={6} sm={3}>
+                    <TextField select fullWidth label="Type" value={np.type} onChange={e => setNp({ ...np, type: e.target.value })}>
+                      {projectTypes.map(t => <MenuItem key={t.code} value={t.code}>{t.label}</MenuItem>)}
                     </TextField>
                   </Grid>
-                  <Grid item xs={6} sm={4}>
-                    <TextField fullWidth size="small" type="date" label="Issue date" InputLabelProps={{ shrink: true }}
-                      value={issueDate} onChange={e => setIssueDate(e.target.value)} required />
-                  </Grid>
-                  <Grid item xs={6} sm={4}>
-                    <TextField fullWidth size="small" type="date" label={DUE_LABEL(docType)} InputLabelProps={{ shrink: true }}
-                      value={dueDate} onChange={e => setDueDate(e.target.value)} />
+                  <Grid item xs={6} sm={3}>
+                    <TextField fullWidth type="date" label="Start date" InputLabelProps={{ shrink: true }} value={np.startDate} onChange={e => setNp({ ...np, startDate: e.target.value })} />
                   </Grid>
                 </Grid>
-                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 2 }}>
-                  <Chip icon={<AutoAwesome sx={{ fontSize: 16 }} />} color="primary" variant="outlined"
-                    label={`Number: ${nextNumber || '…'}`} />
-                  <Chip icon={<AutoAwesome sx={{ fontSize: 16 }} />} color="secondary" variant="outlined"
-                    label={`AiC Code: ${aicCode || 'pick or create a project'}`} />
-                </Box>
-              </Paper>
-            </Grid>
+              )}
+            </SectionCard>
 
-            {/* ── Project / AiC code */}
-            <Grid item xs={12} md={6}>
-              <Paper sx={{ ...paperSx, height: '100%' }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2, gap: 1, flexWrap: 'wrap' }}>
-                  <Typography fontWeight={700}>2. Project (AiC code)</Typography>
-                  <ToggleButtonGroup size="small" exclusive value={projectMode} onChange={(_, v) => v && setProjectMode(v)}>
-                    <ToggleButton value="existing">Existing</ToggleButton>
-                    <ToggleButton value="new">New project</ToggleButton>
-                  </ToggleButtonGroup>
-                </Box>
-                {projectMode === 'existing' ? (
-                  <TextField select fullWidth size="small" label="Project" value={projectId} onChange={e => setProjectId(e.target.value)}
-                    helperText={projects.length ? 'Active projects' : 'No active projects yet — create one with "New project".'}>
-                    {projects.map(p => (
-                      <MenuItem key={p.id} value={p.id}>
-                        <Box>
-                          <Typography variant="body2">{p.name}</Typography>
-                          <Typography variant="caption" color="text.secondary">{p.code}</Typography>
-                        </Box>
-                      </MenuItem>
-                    ))}
-                  </TextField>
-                ) : (
-                  <Grid container spacing={1.5}>
-                    <Grid item xs={12}>
-                      <TextField fullWidth size="small" label="Project name" placeholder="e.g. Dabur Amla Bihar Ad"
-                        value={np.name} onChange={e => setNp({ ...np, name: e.target.value })} />
-                    </Grid>
-                    <Grid item xs={6}>
-                      <TextField fullWidth size="small" label="Client code" value={np.clientCode}
-                        onChange={e => { setNpTouched(t => ({ ...t, clientCode: true })); setNp({ ...np, clientCode: e.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 5) }); }} />
-                    </Grid>
-                    <Grid item xs={6}>
-                      <TextField fullWidth size="small" label="Project tag" value={np.projectTag}
-                        onChange={e => { setNpTouched(t => ({ ...t, projectTag: true })); setNp({ ...np, projectTag: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6) }); }} />
-                    </Grid>
-                    <Grid item xs={6}>
-                      <TextField select fullWidth size="small" label="Type" value={np.type} onChange={e => setNp({ ...np, type: e.target.value })}>
-                        {projectTypes.map(t => <MenuItem key={t.code} value={t.code}>{t.label}</MenuItem>)}
-                      </TextField>
-                    </Grid>
-                    <Grid item xs={6}>
-                      <TextField fullWidth size="small" type="date" label="Start date" InputLabelProps={{ shrink: true }}
-                        value={np.startDate} onChange={e => setNp({ ...np, startDate: e.target.value })} />
-                    </Grid>
-                  </Grid>
-                )}
-              </Paper>
-            </Grid>
-
-            {/* ── Client */}
-            <Grid item xs={12} md={6}>
-              <Paper sx={{ ...paperSx, height: '100%' }}>
-                <Typography fontWeight={700} mb={2}>3. Client</Typography>
-                <Grid container spacing={1.5}>
-                  <Grid item xs={12}>
-                    <TextField fullWidth size="small" label="Client / company name" required
-                      value={client.name} onChange={e => setClient({ ...client, name: e.target.value })} />
-                  </Grid>
-                  <Grid item xs={12}>
-                    <TextField fullWidth size="small" label="Billing address" multiline minRows={2}
-                      value={client.address} onChange={e => setClient({ ...client, address: e.target.value })} />
-                  </Grid>
-                  <Grid item xs={6}>
-                    <TextField fullWidth size="small" label="GSTIN (optional)" inputProps={{ maxLength: 15 }}
-                      value={client.gstin} onChange={e => setClient({ ...client, gstin: e.target.value.toUpperCase() })} />
-                  </Grid>
-                  <Grid item xs={6}>
-                    <TextField fullWidth size="small" label="State" placeholder={config?.company?.state || ''}
-                      value={client.state} onChange={e => setClient({ ...client, state: e.target.value })} />
-                  </Grid>
-                  <Grid item xs={6}>
-                    <TextField fullWidth size="small" label="Email"
-                      value={client.email} onChange={e => setClient({ ...client, email: e.target.value })} />
-                  </Grid>
-                  <Grid item xs={6}>
-                    <TextField fullWidth size="small" label="Phone"
-                      value={client.phone} onChange={e => setClient({ ...client, phone: e.target.value })} />
-                  </Grid>
+            {/* ── 3. Client */}
+            <SectionCard step={3} complete={!!client.name.trim()} title="Client" description="Who the document is addressed to. The client's state decides CGST + SGST or IGST.">
+              <Grid container spacing={2}>
+                <Grid item xs={12}>
+                  <TextField fullWidth label="Client or company name" required value={client.name} onChange={e => setClient({ ...client, name: e.target.value })} />
                 </Grid>
-              </Paper>
-            </Grid>
+                <Grid item xs={12}>
+                  <TextField fullWidth label="Billing address" multiline minRows={2} value={client.address} onChange={e => setClient({ ...client, address: e.target.value })} />
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <TextField fullWidth label="GSTIN" helperText="Optional" inputProps={{ maxLength: 15, style: { fontFamily: tokens.mono } }}
+                    value={client.gstin} onChange={e => setClient({ ...client, gstin: e.target.value.toUpperCase() })} />
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <TextField fullWidth label="State" placeholder={config?.company?.state || ''} value={client.state} onChange={e => setClient({ ...client, state: e.target.value })}
+                    helperText={client.state.trim() ? (effectiveTaxMode === 'IGST' ? 'Other state: IGST applies' : 'Same state: CGST + SGST') : ' '} />
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <TextField fullWidth label="Email" type="email" value={client.email} onChange={e => setClient({ ...client, email: e.target.value })} />
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <TextField fullWidth label="Phone" type="tel" value={client.phone} onChange={e => setClient({ ...client, phone: e.target.value })} />
+                </Grid>
+              </Grid>
+            </SectionCard>
 
-            {/* ── Items */}
-            <Grid item xs={12}>
-              <Paper sx={paperSx}>
-                <Typography fontWeight={700} mb={2}>4. Items</Typography>
+            {/* ── 4. Items */}
+            <SectionCard step={4} complete={itemsDone} title="Items" description="One line per deliverable. SAC is the GST service code (optional).">
+              <Box sx={{ display: 'grid', gap: 1.5 }}>
                 {items.map((it, i) => (
-                  <Grid container spacing={1.5} key={i} sx={{ mb: 1.5 }} alignItems="center">
-                    <Grid item xs={12} md={5}>
-                      <TextField fullWidth size="small" label={`Item ${i + 1} description`}
-                        value={it.description} onChange={e => setItem(i, 'description', e.target.value)} />
-                    </Grid>
-                    <Grid item xs={4} md={2}>
-                      <TextField fullWidth size="small" label="SAC" placeholder="999612"
-                        value={it.sac} onChange={e => setItem(i, 'sac', e.target.value.replace(/[^0-9]/g, '').slice(0, 8))} />
-                    </Grid>
-                    <Grid item xs={3} md={1}>
-                      <TextField fullWidth size="small" type="number" label="Qty" inputProps={{ min: 0, step: 'any' }}
-                        value={it.qty} onChange={e => setItem(i, 'qty', e.target.value)} />
-                    </Grid>
-                    <Grid item xs={5} md={2}>
-                      <TextField fullWidth size="small" type="number" label="Rate (₹)" inputProps={{ min: 0, step: 'any' }}
-                        value={it.rate} onChange={e => setItem(i, 'rate', e.target.value)} />
-                    </Grid>
-                    <Grid item xs={10} md={1.5}>
-                      <Typography variant="body2" textAlign="right">₹ {formatINR((Number(it.qty) || 0) * (Number(it.rate) || 0))}</Typography>
-                    </Grid>
-                    <Grid item xs={2} md={0.5}>
-                      <IconButton size="small" disabled={items.length === 1} onClick={() => setItems(items.filter((_, idx) => idx !== i))}>
-                        <Delete fontSize="small" />
-                      </IconButton>
-                    </Grid>
-                  </Grid>
+                  <Box key={i} sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr 1fr auto', md: 'minmax(0, 1fr) 110px 80px 130px 110px auto' }, gap: 1.25, alignItems: 'center' }}>
+                    <TextField size="small" label={`Item ${i + 1}`} value={it.description} onChange={e => setItem(i, 'description', e.target.value)}
+                      sx={{ gridColumn: { xs: '1 / -1', md: 'auto' } }} />
+                    <TextField size="small" label="SAC" placeholder="999612" value={it.sac} onChange={e => setItem(i, 'sac', e.target.value.replace(/[^0-9]/g, '').slice(0, 8))} />
+                    <TextField size="small" type="number" label="Qty" inputProps={{ min: 0, step: 'any' }} value={it.qty} onChange={e => setItem(i, 'qty', e.target.value)} />
+                    <TextField size="small" type="number" label="Rate" inputProps={{ min: 0, step: 'any' }} value={it.rate} onChange={e => setItem(i, 'rate', e.target.value)}
+                      InputProps={{ startAdornment: <InputAdornment position="start">₹</InputAdornment> }} />
+                    <Typography variant="body2" sx={{ textAlign: 'right', fontWeight: 560, fontFeatureSettings: '"tnum"', display: { xs: 'none', md: 'block' } }}>
+                      {money((Number(it.qty) || 0) * (Number(it.rate) || 0))}
+                    </Typography>
+                    <Tooltip title="Remove item">
+                      <span>
+                        <IconButton size="small" aria-label={`Remove item ${i + 1}`} disabled={items.length === 1} onClick={() => setItems(items.filter((_, idx) => idx !== i))}>
+                          <DeleteOutlineRounded fontSize="small" />
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                  </Box>
                 ))}
-                <Button size="small" startIcon={<Add />} onClick={() => setItems([...items, emptyItem()])} disabled={items.length >= 50}>
-                  Add item
-                </Button>
-
-                <Divider sx={{ my: 2, borderColor: 'rgba(255,255,255,0.08)' }} />
-
-                <Grid container spacing={2}>
-                  <Grid item xs={12} md={6}>
-                    <Grid container spacing={1.5}>
-                      <Grid item xs={6}>
-                        <TextField select fullWidth size="small" label="GST rate" value={taxRate} onChange={e => setTaxRate(e.target.value)}>
-                          {(config?.taxRates || [0, 5, 12, 18, 28]).map(r => <MenuItem key={r} value={r}>{r}%</MenuItem>)}
-                        </TextField>
-                      </Grid>
-                      <Grid item xs={6}>
-                        <TextField select fullWidth size="small" label="GST type" value={taxMode} onChange={e => setTaxMode(e.target.value)}
-                          helperText={taxMode === 'AUTO' ? `Auto → ${effectiveTaxMode === 'IGST' ? 'IGST (other state)' : 'CGST + SGST (same state)'}` : ' '}>
-                          <MenuItem value="AUTO">Auto (by client state)</MenuItem>
-                          <MenuItem value="CGST_SGST">CGST + SGST</MenuItem>
-                          <MenuItem value="IGST">IGST</MenuItem>
-                          <MenuItem value="NONE">No GST</MenuItem>
-                        </TextField>
-                      </Grid>
-                      <Grid item xs={12}>
-                        <TextField fullWidth size="small" label="Notes / terms (optional)" multiline minRows={2}
-                          placeholder="e.g. 50% advance, balance on delivery"
-                          value={notes} onChange={e => setNotes(e.target.value)} />
-                      </Grid>
-                    </Grid>
-                  </Grid>
-                  <Grid item xs={12} md={6}>
-                    <Box sx={{ bgcolor: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.15)', borderRadius: 2, p: 2 }}>
-                      {[
-                        ['Subtotal', totals.subtotal],
-                        ...(effectiveTaxMode === 'CGST_SGST' ? [[`CGST @ ${totals.rate / 2}%`, round2(totals.tax / 2)], [`SGST @ ${totals.rate / 2}%`, round2(totals.tax - round2(totals.tax / 2))]] : []),
-                        ...(effectiveTaxMode === 'IGST' ? [[`IGST @ ${totals.rate}%`, totals.tax]] : []),
-                      ].map(([k, v]) => (
-                        <Box key={k} sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.75 }}>
-                          <Typography variant="body2" color="text.secondary">{k}</Typography>
-                          <Typography variant="body2">₹ {formatINR(v)}</Typography>
-                        </Box>
-                      ))}
-                      <Divider sx={{ my: 1, borderColor: 'rgba(255,255,255,0.1)' }} />
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <Typography fontWeight={700}>Total</Typography>
-                        <Typography fontWeight={700} color="primary">₹ {formatINR(totals.total)}</Typography>
-                      </Box>
-                    </Box>
-                  </Grid>
-                </Grid>
-              </Paper>
-            </Grid>
-
-            <Grid item xs={12}>
-              <Button type="submit" variant="contained" size="large" disabled={saving}
-                startIcon={saving ? <CircularProgress size={18} color="inherit" /> : <PictureAsPdf />}>
-                {saving ? 'Generating…' : `Generate ${typeLabel(docType)} & download PDF`}
+              </Box>
+              <Button size="small" startIcon={<AddRounded />} onClick={() => setItems([...items, emptyItem()])} disabled={items.length >= 50} sx={{ mt: 1.5 }}>
+                Add item
               </Button>
-            </Grid>
-          </Grid>
+
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2, mt: 3, pt: 3, borderTop: `1px solid ${tokens.border}` }}>
+                <TextField select fullWidth label="GST rate" value={taxRate} onChange={e => setTaxRate(e.target.value)}>
+                  {(config?.taxRates || [0, 5, 12, 18, 28]).map(r => <MenuItem key={r} value={r}>{r}%</MenuItem>)}
+                </TextField>
+                <TextField select fullWidth label="GST type" value={taxMode} onChange={e => setTaxMode(e.target.value)}
+                  helperText={taxMode === 'AUTO' ? `Using ${effectiveTaxMode === 'IGST' ? 'IGST' : 'CGST + SGST'} from the client's state` : ' '}>
+                  <MenuItem value="AUTO">Automatic</MenuItem>
+                  <MenuItem value="CGST_SGST">CGST + SGST</MenuItem>
+                  <MenuItem value="IGST">IGST</MenuItem>
+                  <MenuItem value="NONE">No GST</MenuItem>
+                </TextField>
+                <TextField fullWidth label="Notes or terms" multiline minRows={2} placeholder="50% advance, balance on delivery"
+                  value={notes} onChange={e => setNotes(e.target.value)} sx={{ gridColumn: '1 / -1' }} helperText="Optional. Printed on the document." />
+              </Box>
+            </SectionCard>
+          </Box>
+
+          {/* ── Summary (sticky on desktop) */}
+          <Box sx={{ position: { lg: 'sticky' }, top: { lg: 80 }, display: 'grid', gap: 2 }}>
+            <Paper sx={{ p: 2.75, overflow: 'hidden', position: 'relative' }}>
+              <Box aria-hidden sx={{ position: 'absolute', inset: 0, background: 'radial-gradient(400px 180px at 100% 0%, rgba(99,102,241,0.16), transparent 70%)', pointerEvents: 'none' }} />
+              <Box sx={{ position: 'relative' }}>
+                <Typography variant="caption" sx={{ color: 'text.secondary' }}>{typeLabel(docType)} total</Typography>
+                <Typography sx={{ fontSize: 34, fontWeight: 650, letterSpacing: '-0.035em', lineHeight: 1.15, mt: 0.25, fontFeatureSettings: '"tnum"' }}>
+                  {money(totals.total)}
+                </Typography>
+                <Box sx={{ display: 'grid', gap: 0.75, mt: 2, pt: 2, borderTop: `1px solid ${tokens.border}` }}>
+                  {[['Subtotal', totals.subtotal], ...taxLines].map(([k, v]) => (
+                    <Box key={k} sx={{ display: 'flex', justifyContent: 'space-between', gap: 2 }}>
+                      <Typography variant="body2" sx={{ color: 'text.secondary' }}>{k}</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 520, fontFeatureSettings: '"tnum"' }}>{money(v)}</Typography>
+                    </Box>
+                  ))}
+                </Box>
+                <Box sx={{ display: 'grid', gap: 1, mt: 2, pt: 2, borderTop: `1px solid ${tokens.border}` }}>
+                  {[['Number', nextNumber], ['AiC code', aicCode]].map(([k, v]) => (
+                    <Box key={k} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2 }}>
+                      <Typography variant="caption" sx={{ color: 'text.disabled', display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                        <AutoAwesome sx={{ fontSize: 13, color: tones.violet.fg }} /> {k}
+                      </Typography>
+                      {v ? <Code sx={{ textAlign: 'right', wordBreak: 'break-all' }}>{v}</Code>
+                        : <Typography variant="caption" sx={{ color: 'text.disabled' }}>{k === 'AiC code' ? 'Pick a project' : '…'}</Typography>}
+                    </Box>
+                  ))}
+                </Box>
+              </Box>
+            </Paper>
+
+            <Box>
+              <Button type="submit" variant="contained" size="large" fullWidth disabled={saving}
+                startIcon={saving ? <CircularProgress size={18} color="inherit" /> : <PictureAsPdfRounded />} sx={{ minHeight: 50, fontSize: 15 }}>
+                {saving ? 'Generating…' : `Create ${typeLabel(docType).toLowerCase()}`}
+              </Button>
+              <Typography variant="caption" sx={{ display: 'block', textAlign: 'center', mt: 1.25, color: 'text.disabled' }}>
+                Saves it and downloads the PDF
+              </Typography>
+            </Box>
+          </Box>
         </Box>
       )}
 
       {tab === 'list' && (
-        <Paper sx={paperSx}>
-          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
-            {[{ code: 'ALL', label: 'All' }, ...docTypes].map(t => (
-              <Chip key={t.code} label={t.label} onClick={() => setListFilter(t.code)}
-                color={listFilter === t.code ? 'primary' : 'default'} variant={listFilter === t.code ? 'filled' : 'outlined'} />
-            ))}
+        <Paper sx={{ overflow: 'hidden' }}>
+          <Box sx={{ p: 2, borderBottom: `1px solid ${tokens.border}`, overflowX: 'auto' }}>
+            <ToggleButtonGroup size="small" exclusive value={listFilter} onChange={(_, v) => v && setListFilter(v)} aria-label="Filter by type">
+              {[{ code: 'ALL', label: 'All' }, ...docTypes].map(t => (
+                <ToggleButton key={t.code} value={t.code} sx={{ whiteSpace: 'nowrap' }}>
+                  {t.label}
+                  <Box component="span" sx={{ ml: 0.75, color: 'text.disabled', fontFeatureSettings: '"tnum"' }}>
+                    {t.code === 'ALL' ? docs.length : docs.filter(d => d.doc_type === t.code).length}
+                  </Box>
+                </ToggleButton>
+              ))}
+            </ToggleButtonGroup>
           </Box>
-          {docsLoading ? <CircularProgress size={24} /> : filteredDocs.length === 0 ? (
-            <Typography color="text.secondary" variant="body2">No documents yet.</Typography>
-          ) : (
-            <Box sx={{ overflowX: 'auto' }}>
-              <Table size="small">
+
+          {docsLoading && <Box sx={{ p: 2, display: 'grid', gap: 1 }}>{[0, 1, 2].map(i => <Skeleton key={i} height={44} />)}</Box>}
+
+          {!docsLoading && filteredDocs.length === 0 && (
+            <EmptyState icon={<ReceiptLongRounded />} title="No documents yet" description="Invoices, estimates and quotations you create will be listed here."
+              action={<Button variant="contained" startIcon={<AddRounded />} onClick={() => setTab('create')}>Create one</Button>} />
+          )}
+
+          {!docsLoading && filteredDocs.length > 0 && (
+            <TableContainer>
+              <Table sx={{ minWidth: 620 }} aria-label="Billing documents">
                 <TableHead>
                   <TableRow>
-                    <TableCell>Number</TableCell>
-                    <TableCell>Type</TableCell>
-                    <TableCell>AiC Code</TableCell>
+                    <TableCell>Document</TableCell>
                     <TableCell>Client</TableCell>
-                    <TableCell>Date</TableCell>
-                    <TableCell align="right">Total (₹)</TableCell>
+                    <TableCell sx={{ display: { xs: 'none', lg: 'table-cell' } }}>Date</TableCell>
+                    <TableCell align="right">Total</TableCell>
                     <TableCell>Status</TableCell>
-                    <TableCell align="right">Actions</TableCell>
+                    <TableCell align="right" />
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {filteredDocs.map(d => (
                     <TableRow key={d.id} hover>
-                      <TableCell sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{d.doc_number}</TableCell>
-                      <TableCell>{typeLabel(d.doc_type)}</TableCell>
-                      <TableCell sx={{ fontFamily: 'monospace', fontSize: 12 }}>{d.project_code}</TableCell>
-                      <TableCell>{d.client_name}</TableCell>
-                      <TableCell sx={{ whiteSpace: 'nowrap' }}>{d.issue_date}</TableCell>
-                      <TableCell align="right">{formatINR(d.total)}</TableCell>
-                      <TableCell><Chip size="small" label={d.status} color={STATUS_COLORS[d.status] || 'default'} /></TableCell>
+                      <TableCell>
+                        <Code>{d.doc_number}</Code>
+                        <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block' }}>{typeLabel(d.doc_type)} · {d.project_code}</Typography>
+                      </TableCell>
+                      <TableCell sx={{ maxWidth: 220 }}>
+                        <Typography variant="body2" noWrap>{d.client_name}</Typography>
+                      </TableCell>
+                      <TableCell sx={{ whiteSpace: 'nowrap', display: { xs: 'none', lg: 'table-cell' }, color: 'text.secondary' }}>{formatDate(d.issue_date)}</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 600, fontFeatureSettings: '"tnum"', whiteSpace: 'nowrap' }}>{money(d.total)}</TableCell>
+                      <TableCell><ToneChip tone={STATUS_TONES[d.status] || 'neutral'} label={d.status} /></TableCell>
                       <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
                         <Tooltip title="Download PDF">
-                          <IconButton size="small" onClick={() => downloadBillingPdf(d, config?.company)}><PictureAsPdf fontSize="small" /></IconButton>
+                          <IconButton size="small" aria-label="Download PDF" onClick={() => downloadBillingPdf(d, config?.company)}><PictureAsPdfRounded fontSize="small" /></IconButton>
                         </Tooltip>
                         {d.doc_type !== 'INV' && d.status !== 'Cancelled' && (
-                          <Tooltip title="Convert to Tax Invoice">
-                            <IconButton size="small" onClick={() => convertToInvoice(d)}><SwapHoriz fontSize="small" /></IconButton>
+                          <Tooltip title="Convert to tax invoice">
+                            <IconButton size="small" aria-label="Convert to tax invoice" onClick={() => convertToInvoice(d)}><SwapHorizRounded fontSize="small" /></IconButton>
                           </Tooltip>
                         )}
-                        <IconButton size="small" onClick={e => setMenu({ anchor: e.currentTarget, doc: d })}><MoreVert fontSize="small" /></IconButton>
+                        <Tooltip title="Change status">
+                          <IconButton size="small" aria-label="Change status" onClick={e => setMenu({ anchor: e.currentTarget, doc: d })}><MoreVertRounded fontSize="small" /></IconButton>
+                        </Tooltip>
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
-            </Box>
+            </TableContainer>
           )}
           <Menu anchorEl={menu.anchor} open={Boolean(menu.anchor)} onClose={() => setMenu({ anchor: null, doc: null })}>
             {(config?.statuses || ['Issued', 'Sent', 'Accepted', 'Paid', 'Cancelled'])
               .filter(s => s !== menu.doc?.status)
-              .map(s => <MenuItem key={s} onClick={() => setStatus(menu.doc, s)}>Mark as {s}</MenuItem>)}
+              .map(s => <MenuItem key={s} onClick={() => setStatus(menu.doc, s)}>Mark as {s.toLowerCase()}</MenuItem>)}
           </Menu>
         </Paper>
       )}

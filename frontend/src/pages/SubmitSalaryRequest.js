@@ -1,12 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import {
   Box, Typography, TextField, Button, Paper, Alert, Grid, CircularProgress,
-  Select, MenuItem, InputLabel, FormControl, Divider, Chip, Autocomplete
+  Select, MenuItem, InputLabel, FormControl, Autocomplete, InputAdornment, IconButton, Tooltip,
 } from '@mui/material';
+import {
+  CheckCircleRounded, DescriptionRounded, OpenInNewRounded, DeleteOutlineRounded,
+  ReceiptLongRounded, AutoAwesome, ArrowForwardRounded,
+} from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../hooks/useApi';
 import { generateInvoicePdf } from '../utils/generateInvoicePdf';
 import AuthedFile from '../components/AuthedFile';
+import { PageHeader, SectionCard, ToneChip, ChecklistCard, FileDropZone, EmptyState } from '../components/ui';
+import { tokens, tones } from '../theme';
+import { formatINR, parseMsg } from '../utils/format';
 
 const INDIA_CITIES = {
   "Mumbai": "Maharashtra", "Delhi": "Delhi", "Bengaluru": "Karnataka",
@@ -55,6 +62,7 @@ const SubmitSalaryRequest = () => {
   const [fileHash, setFileHash] = useState(draft.fileHash || '');
   const [uploadMessage, setUploadMessage] = useState('');
   const [uploading, setUploading] = useState(false);
+  const [msgFrom, setMsgFrom] = useState('upload'); // which control the status message belongs to
   const [generatingInvoice, setGeneratingInvoice] = useState(false);
 
   // Bank details
@@ -112,7 +120,8 @@ const SubmitSalaryRequest = () => {
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    setUploadMessage('Uploading document...');
+    setMsgFrom('upload');
+    setUploadMessage('Uploading document…');
     setUploading(true);
     const formData = new FormData();
     formData.append('invoice', file); // backend field name is generic
@@ -123,10 +132,10 @@ const SubmitSalaryRequest = () => {
       if (res.ok) {
         const data = await res.json();
         setFileHash(data.file_hash);
-        setUploadMessage(`✅ Document uploaded successfully!${data.invoice_code ? ` Invoice code: ${data.invoice_code}` : ''}`);
+        setUploadMessage(`✅ ${data.invoice_code ? `Uploaded · ${data.invoice_code}` : 'Document uploaded'}`);
       } else {
         const data = await res.json().catch(() => ({}));
-        setUploadMessage(data.error || '❌ Upload failed.');
+        setUploadMessage(`❌ ${data.error || 'Upload failed. Please try again.'}`);
       }
     } catch (err) {
       setUploadMessage('❌ Network error uploading document.');
@@ -138,18 +147,19 @@ const SubmitSalaryRequest = () => {
   // For employees without a payslip/proof document — builds a simple PDF from
   // whatever they've already typed into the form and attaches it.
   const handleGenerateInvoice = async () => {
+    setMsgFrom('generate');
     if (!employeeName.trim() || !baseSalary || parseFloat(baseSalary) <= 0) {
-      setUploadMessage('❌ Enter at least your Name and Base Salary before generating an invoice.');
+      setUploadMessage('❌ Enter your name and base salary first, then generate the invoice.');
       return;
     }
     setGeneratingInvoice(true);
-    setUploadMessage('Generating invoice from your details...');
+    setUploadMessage('Generating invoice from your details…');
     try {
       // Reserve the unique invoice code first so it can be printed on the PDF
       const codeRes = await apiFetch('/api/invoices/reserve-code', { method: 'POST', body: { kind: 'SALARY' } });
       const codeData = await codeRes.json().catch(() => ({}));
       if (!codeRes.ok || !codeData.invoice_code) {
-        setUploadMessage(codeData.error || '❌ Could not get an invoice code. Please try again.');
+        setUploadMessage(`❌ ${codeData.error || 'Could not get an invoice code. Please try again.'}`);
         return;
       }
       const invoiceCode = codeData.invoice_code;
@@ -176,10 +186,10 @@ const SubmitSalaryRequest = () => {
       if (res.ok) {
         const data = await res.json();
         setFileHash(data.file_hash);
-        setUploadMessage(`✅ Invoice ${data.invoice_code || invoiceCode} generated and attached from your details.`);
+        setUploadMessage(`✅ Generated · ${data.invoice_code || invoiceCode}`);
       } else {
         const data = await res.json().catch(() => ({}));
-        setUploadMessage(data.error || '❌ Failed to generate invoice.');
+        setUploadMessage(`❌ ${data.error || 'Could not generate the invoice.'}`);
       }
     } catch (err) {
       setUploadMessage('❌ Network error generating invoice.');
@@ -204,10 +214,10 @@ const SubmitSalaryRequest = () => {
     if (!ifscCode.trim() || ifscCode.length !== 11) missingFields.push('Valid 11-digit IFSC Code');
     if (!accountNumber.trim()) missingFields.push('Bank Account Number');
     if (!purpose.trim()) missingFields.push('Remarks');
-    if (isFirstSubmission && !fileHash) missingFields.push('Payslip / Proof Document — required for your first submission; upload one or use "Generate Invoice" below');
+    if (isFirstSubmission && !fileHash) missingFields.push('Payslip or proof (required on your first request; upload one or generate an invoice)');
 
     if (missingFields.length > 0) {
-      setError(`Please fill in all mandatory fields: ${missingFields.join(', ')}.`);
+      setError(`Still needed: ${missingFields.join(', ')}.`);
       return;
     }
 
@@ -248,254 +258,266 @@ const SubmitSalaryRequest = () => {
     }
   };
 
+  const done = {
+    employee: !!(employeeName.trim() && phone.trim() && city.trim()),
+    salary: !!(month && parseFloat(baseSalary) > 0 && projectHead.trim()),
+    proof: !!fileHash || !isFirstSubmission,
+    bank: !!(beneficiaryName.trim() && bankName.trim() && branchName.trim() && ifscCode.length === 11 && accountNumber.trim()),
+    remarks: !!purpose.trim(),
+  };
+  const checklist = [
+    { key: 'employee', label: 'Your details', anchor: 'sal-employee' },
+    { key: 'salary', label: 'Salary', anchor: 'sal-salary' },
+    { key: 'proof', label: isFirstSubmission ? 'Payslip or proof' : 'Payslip (optional)', anchor: 'sal-proof' },
+    { key: 'bank', label: 'Bank details', anchor: 'sal-bank' },
+    { key: 'remarks', label: 'Remarks', anchor: 'sal-remarks' },
+  ];
+  const upload = parseMsg(uploadMessage);
+  const base = parseFloat(baseSalary) || 0;
+  const ded = parseFloat(deductions) || 0;
+  const monthLabel = month ? new Date(`${month}-01T00:00:00`).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }) : null;
+
   if (success) {
     return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '60vh' }}>
-        <Alert severity="success" sx={{ fontSize: '1.1rem', p: 3 }}>✅ Salary request submitted successfully! Redirecting...</Alert>
+      <Box sx={{ display: 'grid', placeItems: 'center', minHeight: '60vh' }}>
+        <EmptyState
+          icon={<CheckCircleRounded sx={{ color: tones.success.fg }} />}
+          title="Salary request submitted"
+          description="Your approver has been notified. Taking you back to the dashboard…"
+        />
       </Box>
     );
   }
 
   return (
-    <Box sx={{ maxWidth: 900, mx: 'auto' }}>
-      <Paper sx={{ p: { xs: 2, sm: 4 }, borderRadius: 3 }}>
-        <Typography variant="h5" fontWeight={700} mb={0.5}>Salary Payment Request Form</Typography>
-        <Typography variant="body2" color="text.secondary" mb={3}>
-          Submit a salary disbursement request. ★ Marked fields are mandatory.
-        </Typography>
+    <Box sx={{ pb: 8 }}>
+      <PageHeader
+        eyebrow="Salary"
+        title="Request a salary payment"
+        subtitle="Tell us the month and amount, confirm your bank account, and we'll route it to your approver. Your progress is saved as you type."
+      />
 
-        {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
+      {error && <Alert severity="error" sx={{ mb: 3 }} onClose={() => setError(null)}>{error}</Alert>}
 
-        <form onSubmit={handleSubmit}>
-          {/* ── EMPLOYEE DETAILS ── */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-            <Typography variant="h6" color="primary">1. Employee Details</Typography>
-            <Chip label="All Fields Mandatory ★" size="small" sx={{ bgcolor: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 700, fontSize: 10, border: '1px solid rgba(239,68,68,0.3)' }} />
-          </Box>
-          <Grid container spacing={3} mb={2}>
-            <Grid item xs={12} sm={6}>
-              <TextField fullWidth required label="Employee Name" value={employeeName} onChange={(e) => setEmployeeName(e.target.value)} />
+      <Box component="form" onSubmit={handleSubmit} noValidate sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'minmax(0, 1fr) 340px' }, gap: 3, alignItems: 'start' }}>
+        <Box sx={{ display: 'grid', gap: 2.5, minWidth: 0 }}>
+
+          {/* ── 1. EMPLOYEE ── */}
+          <SectionCard id="sal-employee" step={1} complete={done.employee} title="Your details" description="So finance knows who is being paid and how to reach you.">
+            <Grid container spacing={2.5}>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth required label="Full name" value={employeeName} onChange={(e) => setEmployeeName(e.target.value)} autoComplete="name" />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth label="Employee ID" value={employeeCode} onChange={(e) => setEmployeeCode(e.target.value)} helperText="Optional" />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth required label="Phone" value={phone} onChange={(e) => setPhone(e.target.value)} type="tel" autoComplete="tel" />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth label="Department" value={department} onChange={(e) => setDepartment(e.target.value)} helperText="Optional" />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <Autocomplete
+                  options={Object.keys(INDIA_CITIES)}
+                  value={city || null}
+                  onChange={(e, selectedCity) => {
+                    setCity(selectedCity || '');
+                    setState(selectedCity && INDIA_CITIES[selectedCity] ? INDIA_CITIES[selectedCity] : '');
+                  }}
+                  renderInput={(params) => <TextField {...params} label="City" required fullWidth />}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth label="State" value={state} InputProps={{ readOnly: true }} helperText="Filled in from your city" />
+              </Grid>
             </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField fullWidth label="Employee ID / Code" value={employeeCode} onChange={(e) => setEmployeeCode(e.target.value)} placeholder="Optional" />
+          </SectionCard>
+
+          {/* ── 2. SALARY ── */}
+          <SectionCard id="sal-salary" step={2} complete={done.salary} title="Salary" description="Net payable is worked out for you from the base salary and deductions.">
+            <Grid container spacing={2.5}>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth required type="month" label="Salary month" value={month} onChange={(e) => setMonth(e.target.value)} InputLabelProps={{ shrink: true }} />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth required label="Approver" value={projectHead} onChange={(e) => setProjectHead(e.target.value)}
+                  helperText="The project head who signs off on this payment"
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth required type="number" label="Base salary" value={baseSalary} onChange={(e) => setBaseSalary(e.target.value)}
+                  InputProps={{ startAdornment: <InputAdornment position="start">₹</InputAdornment> }} inputProps={{ min: 0 }}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth type="number" label="Deductions" value={deductions} onChange={(e) => setDeductions(e.target.value)}
+                  InputProps={{ startAdornment: <InputAdornment position="start">₹</InputAdornment> }} inputProps={{ min: 0 }}
+                  helperText="Enter 0 if there are none"
+                />
+              </Grid>
             </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField fullWidth required label="Phone Number" value={phone} onChange={(e) => setPhone(e.target.value)} />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField fullWidth label="Department" value={department} onChange={(e) => setDepartment(e.target.value)} placeholder="Optional" />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <Autocomplete
-                options={Object.keys(INDIA_CITIES)}
-                value={city || null}
-                onChange={(e, selectedCity) => {
-                  setCity(selectedCity || '');
-                  setState(selectedCity && INDIA_CITIES[selectedCity] ? INDIA_CITIES[selectedCity] : '');
-                }}
-                renderInput={(params) => (
-                  <TextField {...params} label="City / Location ★" required fullWidth />
-                )}
+          </SectionCard>
+
+          {/* ── 3. PROOF ── */}
+          <SectionCard
+            id="sal-proof" step={3} complete={!!fileHash}
+            title="Payslip or proof"
+            description={isFirstSubmission
+              ? 'Required for your first request. No document? Generate one from this form in the summary panel.'
+              : "You've submitted before, so this is optional. You can still attach one."}
+            badge={fileHash
+              ? <ToneChip tone="success" label="Attached" icon={<CheckCircleRounded />} />
+              : <ToneChip tone={isFirstSubmission ? 'warning' : 'neutral'} label={isFirstSubmission ? 'Required' : 'Optional'} />}
+          >
+            {!fileHash && !uploading && (
+              <FileDropZone
+                onFile={(f) => handleFileUpload({ target: { files: [f] } })}
+                title="Drop a payslip or ID proof here, or "
               />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField fullWidth label="State (Auto-filled)" value={state} InputProps={{ readOnly: true }} />
-            </Grid>
-          </Grid>
-          <Divider sx={{ mb: 4 }} />
-
-          {/* ── SALARY DETAILS ── */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-            <Typography variant="h6" color="primary">2. Salary Details</Typography>
-            <Chip label="All Fields Mandatory ★" size="small" sx={{ bgcolor: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 700, fontSize: 10, border: '1px solid rgba(239,68,68,0.3)' }} />
-          </Box>
-          <Grid container spacing={3} mb={2}>
-            <Grid item xs={12} sm={6}>
-              <TextField fullWidth required type="month" label="Salary Month" value={month} onChange={(e) => setMonth(e.target.value)} InputLabelProps={{ shrink: true }} />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField fullWidth required type="number" label="Base Salary" value={baseSalary} onChange={(e) => setBaseSalary(e.target.value)} InputProps={{ startAdornment: '₹' }} />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField fullWidth type="number" label="Deductions (enter 0 if none)" value={deductions} onChange={(e) => setDeductions(e.target.value)} InputProps={{ startAdornment: '₹' }} />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField fullWidth label="Net Payable (Auto-calculated)" value={netAmount.toFixed(2)} InputProps={{ readOnly: true, startAdornment: '₹' }} />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                required
-                label="Project Head / Approver"
-                placeholder="Type the name of the person approving this request"
-                value={projectHead}
-                onChange={(e) => setProjectHead(e.target.value)}
-              />
-            </Grid>
-          </Grid>
-          <Grid container spacing={3} mb={4}>
-            <Grid item xs={12}>
-              <TextField
-                fullWidth required label="Remarks" multiline rows={3}
-                value={purpose} onChange={(e) => setPurpose(e.target.value)}
-                placeholder="Brief note about this salary payment (e.g. month, role, any adjustments)."
-              />
-            </Grid>
-          </Grid>
-          <Divider sx={{ mb: 4 }} />
-
-          {/* ── OPTIONAL PROOF / PAYSLIP UPLOAD ── */}
-          <Typography variant="h6" color="primary" mb={1}>
-            3. Payslip / Proof Document {isFirstSubmission ? '★ Required (first submission)' : '(Optional)'}
-          </Typography>
-          {!isFirstSubmission && (
-            <Typography variant="caption" color="text.secondary" display="block" mb={1}>
-              You've submitted before, so a document isn't required this time — but you can still attach one, or use "Generate Invoice from Details" below.
-            </Typography>
-          )}
-          <Box sx={{ mb: 4, p: 3, border: '1px dashed rgba(99,102,241,0.5)', borderRadius: 2, bgcolor: 'rgba(99,102,241,0.05)' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1.5 }}>
-              {!fileHash ? (
-                <Button variant="outlined" component="label" disabled={uploading}>
-                  📁 Upload Payslip / ID Proof (Image/PDF)
-                  <input type="file" hidden accept="image/*,.webp,.heic,.heif,.pdf" onChange={handleFileUpload} />
-                </Button>
-              ) : (
-                <>
-                  <AuthedFile name={fileHash}>
-                    {(fileUrl) => (
-                      <Button
-                        variant="outlined"
-                        color="primary"
-                        href={fileUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        👁️ Preview Document
-                      </Button>
-                    )}
-                  </AuthedFile>
-                  <Button variant="outlined" color="error" onClick={() => { setFileHash(''); setUploadMessage(''); }}>
-                    ❌ Remove Document
-                  </Button>
-                </>
-              )}
-              {uploading && <CircularProgress size={20} />}
-              {uploadMessage && (
-                <Typography variant="body2" sx={{ color: uploadMessage.startsWith('✅') ? 'success.main' : 'text.secondary' }}>
-                  {uploadMessage}
-                </Typography>
-              )}
-            </Box>
-
+            )}
+            {uploading && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, p: 2, borderRadius: `${tokens.radius.lg}px`, border: `1px solid ${tones.accent.border}`, bgcolor: tones.accent.bg }}>
+                <CircularProgress size={20} thickness={5} />
+                <Typography variant="body2">Uploading document…</Typography>
+              </Box>
+            )}
+            {upload.text && msgFrom === 'upload' && !fileHash && !uploading && (
+              <Alert severity={upload.tone} sx={{ mt: 2 }}>{upload.text}</Alert>
+            )}
             {fileHash && !uploading && (
-              <Box sx={{ mt: 2, border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, overflow: 'hidden', maxWidth: 340 }}>
-                <Typography variant="caption" sx={{ p: 1, display: 'block', borderBottom: '1px solid rgba(255,255,255,0.08)', fontWeight: 600, color: 'text.secondary', bgcolor: 'rgba(255,255,255,0.02)' }}>
-                  📄 Document Preview
-                </Typography>
-                <Box sx={{ p: 1.5, backgroundColor: 'rgba(0,0,0,0.2)', textAlign: 'center' }}>
+              <Box sx={{ border: `1px solid ${tokens.border}`, borderRadius: `${tokens.radius.lg}px`, overflow: 'hidden', bgcolor: tokens.surfaceSunken, maxWidth: 420 }}>
+                <Box sx={{ px: 1.75, py: 1.25, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, borderBottom: `1px solid ${tokens.border}` }}>
+                  <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary', display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
+                    <DescriptionRounded sx={{ fontSize: 16 }} /> {upload.tone === 'success' && upload.text ? upload.text : 'Attached document'}
+                  </Typography>
+                  <Box sx={{ display: 'flex', gap: 0.5, flexShrink: 0 }}>
+                    <AuthedFile name={fileHash}>
+                      {(fileUrl) => (
+                        <Tooltip title="Open in new tab">
+                          <IconButton size="small" href={fileUrl} target="_blank" rel="noopener noreferrer" aria-label="Open document"><OpenInNewRounded fontSize="small" /></IconButton>
+                        </Tooltip>
+                      )}
+                    </AuthedFile>
+                    <Tooltip title="Remove">
+                      <IconButton size="small" onClick={() => { setFileHash(''); setUploadMessage(''); }} aria-label="Remove document"><DeleteOutlineRounded fontSize="small" /></IconButton>
+                    </Tooltip>
+                  </Box>
+                </Box>
+                <Box sx={{ p: 1.5, textAlign: 'center' }}>
                   <AuthedFile name={fileHash}>
                     {(fileUrl) => fileHash.toLowerCase().endsWith('.pdf') ? (
-                      <iframe src={fileUrl} title="Document Preview" width="100%" height="200px" style={{ border: 'none', backgroundColor: '#fff', borderRadius: 4 }} />
+                      <iframe src={fileUrl} title="Document preview" width="100%" height="220px" style={{ border: 'none', backgroundColor: '#fff', borderRadius: 8 }} />
                     ) : (
-                      <img
-                        src={fileUrl}
-                        alt="Document Preview"
-                        style={{ maxWidth: '100%', maxHeight: 200, borderRadius: 4, display: 'inline-block' }}
-                        onError={(e) => { e.target.style.display = 'none'; }}
-                      />
+                      <img src={fileUrl} alt="Document preview" style={{ maxWidth: '100%', maxHeight: 220, borderRadius: 8, display: 'inline-block' }} onError={(e) => { e.target.style.display = 'none'; }} />
                     )}
                   </AuthedFile>
                 </Box>
               </Box>
             )}
-          </Box>
+          </SectionCard>
 
-          {/* ── BANK DETAILS ── */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-            <Typography variant="h6" color="primary">4. Bank Details</Typography>
-            <Chip label="All Fields Mandatory ★" size="small" sx={{ bgcolor: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 700, fontSize: 10, border: '1px solid rgba(239,68,68,0.3)' }} />
-          </Box>
-          <Grid container spacing={3} mb={4}>
-            <Grid item xs={12} sm={6}>
-              <TextField fullWidth required label="Beneficiary / Account Holder Name" value={beneficiaryName} onChange={(e) => setBeneficiaryName(e.target.value)} placeholder="Name as in Bank Account" />
+          {/* ── 4. BANK ── */}
+          <SectionCard id="sal-bank" step={4} complete={done.bank} title="Bank details" description="The account the salary is paid into. Check the IFSC and account number carefully.">
+            <Grid container spacing={2.5}>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth required label="Account holder name" value={beneficiaryName} onChange={(e) => setBeneficiaryName(e.target.value)} helperText="As it appears on your bank account" />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth required label="Bank" value={bankName} onChange={(e) => setBankName(e.target.value)} placeholder="HDFC Bank, SBI, ICICI…" />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth required label="Branch" value={branchName} onChange={(e) => setBranchName(e.target.value)} />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth required label="IFSC" value={ifscCode} onChange={(e) => setIfscCode(e.target.value.toUpperCase())}
+                  placeholder="HDFC0000123" inputProps={{ maxLength: 11, style: { fontFamily: tokens.mono, letterSpacing: '0.04em' } }}
+                  error={ifscCode.length > 0 && ifscCode.length !== 11}
+                  helperText={ifscCode.length > 0 && ifscCode.length !== 11 ? `${ifscCode.length}/11 characters` : ' '}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth required label="Account number" value={accountNumber} onChange={(e) => setAccountNumber(e.target.value)} inputProps={{ inputMode: 'numeric', style: { fontFamily: tokens.mono } }} />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <FormControl fullWidth required>
+                  <InputLabel>Account type</InputLabel>
+                  <Select value={accountType} label="Account type" onChange={(e) => setAccountType(e.target.value)}>
+                    <MenuItem value="Savings">Savings</MenuItem>
+                    <MenuItem value="Current">Current</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
             </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField fullWidth required label="Bank Name" value={bankName} onChange={(e) => setBankName(e.target.value)} placeholder="e.g. HDFC Bank, SBI, ICICI" />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField fullWidth required label="Branch Name" value={branchName} onChange={(e) => setBranchName(e.target.value)} placeholder="e.g. Connaught Place, Mumbai Main" />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField fullWidth required label="IFSC Code" value={ifscCode} onChange={(e) => setIfscCode(e.target.value.toUpperCase())} placeholder="e.g. HDFC0000123" inputProps={{ maxLength: 11 }} />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField fullWidth required label="Bank Account Number" value={accountNumber} onChange={(e) => setAccountNumber(e.target.value)} placeholder="e.g. 50100234567890" />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <FormControl fullWidth required>
-                <InputLabel>Account Type</InputLabel>
-                <Select value={accountType} label="Account Type" onChange={(e) => setAccountType(e.target.value)}>
-                  <MenuItem value="Savings">Savings</MenuItem>
-                  <MenuItem value="Current">Current</MenuItem>
-                </Select>
-              </FormControl>
-            </Grid>
-          </Grid>
+          </SectionCard>
 
-          {/* GENERATE INVOICE FROM TYPED DETAILS — for employees without a real payslip document */}
-          <Paper sx={{
-            p: 2.5, mb: 3, borderRadius: 2,
-            bgcolor: fileHash ? 'rgba(16,185,129,0.06)' : 'rgba(245,158,11,0.06)',
-            border: `1px dashed ${fileHash ? 'rgba(16,185,129,0.4)' : 'rgba(245,158,11,0.4)'}`
-          }}>
-            {fileHash ? (
-              <>
-                <Typography variant="subtitle2" fontWeight={700} color="success.main" mb={0.5}>
-                  ✅ Document attached to this request
-                </Typography>
-                <Typography variant="caption" color="text.secondary" display="block" mb={1.5}>
-                  See the preview in "3. Payslip / Proof Document" above. Remove it there if you'd like to attach a different one.
-                </Typography>
-                <AuthedFile name={fileHash}>
-                  {(fileUrl) => (
-                    <Button
-                      variant="outlined" size="small" color="primary"
-                      href={fileUrl} target="_blank" rel="noopener noreferrer"
-                    >
-                      👁️ Preview Attached Document
-                    </Button>
-                  )}
-                </AuthedFile>
-              </>
-            ) : (
-              <>
-                <Typography variant="subtitle2" fontWeight={700} mb={0.5}>
-                  🧾 Don't have a payslip or proof document?
-                </Typography>
-                <Typography variant="caption" color="text.secondary" display="block" mb={1.5}>
-                  Fill in your Name and Base Salary above, then generate a simple invoice automatically from the details you've typed into this form.
-                </Typography>
-                <Button variant="outlined" color="warning" onClick={handleGenerateInvoice} disabled={generatingInvoice}>
-                  {generatingInvoice ? <CircularProgress size={20} /> : '🧾 Generate Invoice from Details'}
-                </Button>
-                {uploadMessage && (
-                  <Typography variant="body2" sx={{ mt: 1.5, color: uploadMessage.startsWith('✅') ? 'success.main' : uploadMessage.startsWith('❌') ? 'error.main' : 'text.secondary' }}>
-                    {uploadMessage}
-                  </Typography>
-                )}
-              </>
-            )}
+          {/* ── 5. REMARKS ── */}
+          <SectionCard id="sal-remarks" step={5} complete={done.remarks} title="Remarks" description="A short note for your approver: the month, your role, any adjustments.">
+            <TextField
+              fullWidth required multiline minRows={3} label="Remarks" value={purpose} onChange={(e) => setPurpose(e.target.value)}
+              inputProps={{ maxLength: 500 }} helperText={`${purpose.length}/500`}
+            />
+          </SectionCard>
+        </Box>
+
+        {/* ── SUMMARY (sticky on desktop) ── */}
+        <Box sx={{ position: { lg: 'sticky' }, top: { lg: 80 }, display: 'grid', gap: 2 }}>
+          <Paper sx={{ p: 2.75, overflow: 'hidden', position: 'relative' }}>
+            <Box aria-hidden sx={{ position: 'absolute', inset: 0, background: 'radial-gradient(400px 180px at 100% 0%, rgba(99,102,241,0.16), transparent 70%)', pointerEvents: 'none' }} />
+            <Box sx={{ position: 'relative' }}>
+              <Typography variant="caption" sx={{ color: 'text.secondary' }}>Net payable{monthLabel ? ` · ${monthLabel}` : ''}</Typography>
+              <Typography sx={{ fontSize: 34, fontWeight: 650, letterSpacing: '-0.035em', lineHeight: 1.15, mt: 0.25, fontFeatureSettings: '"tnum"' }}>
+                {formatINR(netAmount)}
+              </Typography>
+              <Box sx={{ display: 'grid', gap: 0.75, mt: 2, pt: 2, borderTop: `1px solid ${tokens.border}` }}>
+                {[['Base salary', formatINR(base)], ['Deductions', ded ? `− ${formatINR(ded)}` : formatINR(0)]].map(([k, v]) => (
+                  <Box key={k} sx={{ display: 'flex', justifyContent: 'space-between', gap: 2 }}>
+                    <Typography variant="body2" sx={{ color: 'text.secondary' }}>{k}</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 520, fontFeatureSettings: '"tnum"' }}>{v}</Typography>
+                  </Box>
+                ))}
+              </Box>
+            </Box>
           </Paper>
 
-          <Button
-            type="submit" variant="contained" color="primary" size="large" fullWidth
-            disabled={loading || success || checkingHistory} sx={{ py: 1.5, fontSize: '1.1rem' }}
-          >
-            {loading ? <CircularProgress size={24} color="inherit" /> : '🚀 Submit Salary Request'}
-          </Button>
-        </form>
-      </Paper>
+          <ChecklistCard items={checklist} done={done} />
+
+          {!fileHash && (
+            <Paper sx={{ p: 2.5, borderColor: tones.warning.border, bgcolor: 'rgba(245,158,11,0.04)' }}>
+              <Typography variant="subtitle2" sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                <ReceiptLongRounded sx={{ fontSize: 18, color: tones.warning.fg }} /> No payslip to hand?
+              </Typography>
+              <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mt: 0.5, mb: 1.5 }}>
+                Fill in your name and base salary, then we'll generate a numbered invoice from this form and attach it.
+              </Typography>
+              <Button variant="outlined" color="warning" fullWidth onClick={handleGenerateInvoice} disabled={generatingInvoice} startIcon={generatingInvoice ? <CircularProgress size={14} color="inherit" /> : <AutoAwesome />}>
+                {generatingInvoice ? 'Generating…' : 'Generate invoice'}
+              </Button>
+              {upload.text && msgFrom === 'generate' && !generatingInvoice && upload.tone === 'error' && (
+                <Typography variant="caption" sx={{ display: 'block', mt: 1.25, color: tones.danger.fg }}>{upload.text}</Typography>
+              )}
+            </Paper>
+          )}
+
+          <Box>
+            <Button
+              type="submit" variant="contained" size="large" fullWidth
+              disabled={loading || success || checkingHistory}
+              endIcon={!loading && <ArrowForwardRounded />}
+              sx={{ minHeight: 50, fontSize: 15 }}
+            >
+              {loading ? <CircularProgress size={22} color="inherit" /> : 'Submit for approval'}
+            </Button>
+            <Typography variant="caption" sx={{ display: 'block', textAlign: 'center', mt: 1.25, color: 'text.disabled' }}>
+              Next: approver sign-off → finance check → payment
+            </Typography>
+          </Box>
+        </Box>
+      </Box>
     </Box>
   );
 };

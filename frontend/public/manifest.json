@@ -1,6 +1,6 @@
 {
-  "short_name": "Ai Finance",
-  "name": "Ai Collective Finance",
+  "short_name": "AiC Finance",
+  "name": "AI Collective Finance",
   "icons": [
     {
       "src": "/icon.svg",
@@ -10,6 +10,6 @@
   ],
   "start_url": ".",
   "display": "standalone",
-  "theme_color": "#0b0f19",
-  "background_color": "#0b0f19"
+  "theme_color": "#0A0C12",
+  "background_color": "#0A0C12"
 }

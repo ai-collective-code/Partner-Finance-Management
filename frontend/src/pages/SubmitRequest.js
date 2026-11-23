@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Box, Typography, TextField, Button, Paper, InputAdornment, 
-  Alert, Grid, CircularProgress, Switch, FormControlLabel, 
-  Select, MenuItem, InputLabel, FormControl, Divider, Avatar, Chip,
-  Tooltip, IconButton, Autocomplete, Dialog, DialogTitle, DialogContent, DialogActions
+import {
+  Box, Typography, TextField, Button, Paper, InputAdornment,
+  Alert, Grid, CircularProgress, Switch, FormControlLabel,
+  Select, MenuItem, InputLabel, FormControl,
+  Tooltip, Autocomplete, Dialog, DialogTitle, DialogContent, DialogActions
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
@@ -11,16 +11,14 @@ import { useApi } from '../hooks/useApi';
 import { generateInvoicePdf } from '../utils/generateInvoicePdf';
 import AuthedFile from '../components/AuthedFile';
 import {
-  CheckCircle, Cancel, Palette,
-  AutoAwesome, PlayForWork, VerifiedUser, HelpOutline, TaskAlt, Lock
+  CheckCircle, Cancel, AutoAwesome, PlayForWork, VerifiedUser, Lock,
+  CheckRounded, CloseRounded, CloudUploadRounded, DescriptionRounded, SwapHorizRounded, OpenInNewRounded,
+  CheckCircleRounded, ReceiptLongRounded, ArrowForwardRounded,
+  UploadFileRounded, AccountBalanceRounded,
 } from '@mui/icons-material';
-
-const STATES = [
-  'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 'Gujarat', 'Haryana', 
-  'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur', 
-  'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 
-  'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal', 'Delhi', 'Other'
-];
+import { PageHeader, SectionCard, ToneChip, KeyValue, Code, ChecklistCard } from '../components/ui';
+import { tokens, tones } from '../theme';
+import { formatINR, parseMsg } from '../utils/format';
 
 const OUR_COMPANY_STATE = 'Uttar Pradesh';
 
@@ -162,49 +160,28 @@ const INDIA_CITIES = {
 };
 
 // ── Field Verification Badge Component ──
+// Shown under fields that were auto-filled from the invoice: confirm or flag the value.
 const FieldVerifyBadge = ({ fieldKey, verifications, onVerify }) => {
   const status = verifications[fieldKey];
   if (status === undefined) return null;
+  const pill = (active, tone) => ({
+    display: 'inline-flex', alignItems: 'center', gap: 0.5, px: 1, py: 0.25, borderRadius: '7px', cursor: 'pointer',
+    fontSize: 12, fontWeight: 560, font: 'inherit', lineHeight: 1.6,
+    border: `1px solid ${active ? tones[tone].border : tokens.border}`,
+    bgcolor: active ? tones[tone].bg : 'transparent',
+    color: active ? tones[tone].fg : 'text.secondary',
+    '&:hover': { borderColor: tones[tone].border, color: tones[tone].fg },
+    '&:focus-visible': { outline: 'none', boxShadow: tokens.focusRing },
+  });
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
-      <Tooltip title="Confirm this value is correct">
-        <IconButton 
-          size="small" 
-          onClick={() => onVerify(fieldKey, true)}
-          sx={{ 
-            color: status === true ? '#10b981' : 'rgba(255,255,255,0.3)', 
-            p: 0.4,
-            bgcolor: status === true ? 'rgba(16,185,129,0.12)' : 'transparent',
-            border: status === true ? '1px solid rgba(16,185,129,0.4)' : '1px solid rgba(255,255,255,0.1)',
-            borderRadius: 1,
-            transition: 'all 0.2s'
-          }}
-        >
-          <TaskAlt sx={{ fontSize: 16 }} />
-        </IconButton>
-      </Tooltip>
-      <Tooltip title="Mark as incorrect or uncertain">
-        <IconButton 
-          size="small" 
-          onClick={() => onVerify(fieldKey, false)}
-          sx={{ 
-            color: status === false ? '#ef4444' : 'rgba(255,255,255,0.3)', 
-            p: 0.4,
-            bgcolor: status === false ? 'rgba(239,68,68,0.12)' : 'transparent',
-            border: status === false ? '1px solid rgba(239,68,68,0.4)' : '1px solid rgba(255,255,255,0.1)',
-            borderRadius: 1,
-            transition: 'all 0.2s'
-          }}
-        >
-          <Cancel sx={{ fontSize: 16 }} />
-        </IconButton>
-      </Tooltip>
-      {status === true && (
-        <Typography variant="caption" sx={{ color: '#10b981', fontWeight: 600, fontSize: 10 }}>Verified ✓</Typography>
-      )}
-      {status === false && (
-        <Typography variant="caption" sx={{ color: '#ef4444', fontWeight: 600, fontSize: 10 }}>Please correct ✗</Typography>
-      )}
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mt: 0.75 }}>
+      <Typography variant="caption" sx={{ color: 'text.disabled', mr: 0.25 }}>From invoice:</Typography>
+      <Box component="button" type="button" aria-pressed={status === true} onClick={() => onVerify(fieldKey, true)} sx={pill(status === true, 'success')}>
+        <CheckRounded sx={{ fontSize: 14 }} /> Correct
+      </Box>
+      <Box component="button" type="button" aria-pressed={status === false} onClick={() => onVerify(fieldKey, false)} sx={pill(status === false, 'danger')}>
+        <CloseRounded sx={{ fontSize: 14 }} /> Needs fixing
+      </Box>
     </Box>
   );
 };
@@ -214,6 +191,7 @@ const SubmitRequest = () => {
   const [ocrData, setOcrData] = useState(null);
   const [ocrScanning, setOcrScanning] = useState(false);
   const [ocrApplied, setOcrApplied] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
 
   // Per-field verification (null = not shown, true = verified, false = flagged incorrect)
   const [verifications, setVerifications] = useState({});
@@ -240,7 +218,7 @@ const SubmitRequest = () => {
   const [baseAmount, setBaseAmount] = useState('');
   const [isGst, setIsGst] = useState(false);
   const [gstNumber, setGstNumber] = useState('');
-  const [gstPercentage, setGstPercentage] = useState(18); // Fixed to 18%
+  const [gstPercentage] = useState(18); // Fixed to 18%
 
   // Derived Financials
   const [gstAmount, setGstAmount] = useState(0);
@@ -484,7 +462,7 @@ const SubmitRequest = () => {
         setChequeUploadMessage('✅ Bank document uploaded successfully!');
       } else {
         const data = await res.json().catch(() => ({}));
-        setChequeUploadMessage(data.error || '❌ Upload failed.');
+        setChequeUploadMessage(`❌ ${data.error || 'Upload failed.'}`);
       }
     } catch (err) {
       console.error(err);
@@ -508,7 +486,7 @@ const SubmitRequest = () => {
       const codeRes = await apiFetch('/api/invoices/reserve-code', { method: 'POST', body: { kind: 'PARTNER' } });
       const codeData = await codeRes.json().catch(() => ({}));
       if (!codeRes.ok || !codeData.invoice_code) {
-        setUploadMessage(codeData.error || '❌ Could not get an invoice code. Please try again.');
+        setUploadMessage(`❌ ${codeData.error || 'Could not get an invoice code. Please try again.'}`);
         return;
       }
       const invoiceCode = codeData.invoice_code;
@@ -550,7 +528,7 @@ const SubmitRequest = () => {
         setUploadMessage(`✅ Invoice ${data.invoice_code || invoiceCode} generated and attached from your details.`);
       } else {
         const data = await res.json().catch(() => ({}));
-        setUploadMessage(data.error || '❌ Failed to generate invoice.');
+        setUploadMessage(`❌ ${data.error || 'Failed to generate invoice.'}`);
       }
     } catch (err) {
       setUploadMessage('❌ Network error generating invoice.');
@@ -680,648 +658,491 @@ const SubmitRequest = () => {
   const flaggedCount = Object.values(verifications).filter(v => v === false).length;
   const pendingCount = Object.values(verifications).filter(v => v === null).length;
 
+  // Section completeness drives the step badges and the summary checklist
+  const done = {
+    invoice: !!fileHash,
+    partner: !!(vendorName.trim() && companyName.trim() && phone.trim() && city.trim()),
+    project: !!(projectName.trim() && department && selectedVerifier.trim() && startDate && endDate && (!isPartner || lockedProject)),
+    amount: !!(parseFloat(baseAmount) > 0 && advanceAmount.trim() !== '' && (!isGst || gstNumber.trim())),
+    bank: !!(beneficiaryName.trim() && bankName.trim() && branchName.trim() && ifscCode.length === 11 && accountNumber.trim()),
+    remarks: !!purpose.trim(),
+  };
+  const checklist = [
+    { key: 'invoice', label: 'Invoice', anchor: 'sec-invoice' },
+    { key: 'partner', label: 'Your details', anchor: 'sec-partner' },
+    { key: 'project', label: 'Project', anchor: 'sec-project' },
+    { key: 'amount', label: 'Amount & GST', anchor: 'sec-amount' },
+    { key: 'bank', label: 'Bank details', anchor: 'sec-bank' },
+    { key: 'remarks', label: 'Description', anchor: 'sec-remarks' },
+  ];
+  const total = totalAmount || parseFloat(baseAmount) || 0;
+  const upload = parseMsg(uploadMessage);
+  const cheque = parseMsg(chequeUploadMessage);
+  const resetInvoice = () => { setFileHash(''); setUploadMessage(''); setBaseAmount(''); setOcrData(null); setOcrApplied(false); setVerifications({}); };
+
   return (
-    <Box sx={{ maxWidth: 960, mx: 'auto', mt: 2, mb: 10 }}>
-      <Typography variant="h4" mb={0.5} fontWeight={700}>Partner & Project Disbursement Form</Typography>
-      <Typography variant="body1" color="text.secondary" mb={1}>
-        Initialize a secure financial request. <strong style={{ color: '#f59e0b' }}>★ All form fields and documents are strictly mandatory.</strong>
-      </Typography>
-      <Paper sx={{ p: 4, borderRadius: 2 }}>
-        {success && <Alert severity="success" sx={{ mb: 3 }}>Request submitted successfully! Redirecting to Dashboard...</Alert>}
-        {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
-        
-        <form onSubmit={handleSubmit}>
-          
-          {/* ── STEP 1: UPLOAD INVOICE ── */}
-          <Typography variant="h6" color="primary" mb={1}>
-            1. Upload Partner Invoice (AI OCR) ★ Required
-          </Typography>
-          <Typography variant="caption" color="text.secondary" display="block" mb={1}>
-            Every submission needs an invoice. Upload yours here, or fill in the form and use "Generate Invoice from Details" near the bottom. You can't submit without one.
-          </Typography>
-          <Box sx={{ mb: 4, p: 3, border: '1px dashed rgba(99,102,241,0.5)', borderRadius: 2, bgcolor: 'rgba(99,102,241,0.05)' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, flexWrap: 'wrap', gap: 1.5 }}>
-              {!fileHash ? (
-                <Button variant="outlined" component="label" sx={{ mr: 2, background: 'linear-gradient(135deg, rgba(99,102,241,0.08), rgba(139,92,246,0.08))', borderColor: 'primary.main' }} disabled={ocrScanning}>
-                  📁 Upload Invoice (Image/PDF)
-                  <input type="file" hidden accept="image/*,.webp,.heic,.heif,.pdf" onChange={handleFileUpload} />
-                </Button>
-              ) : (
-                <Button variant="outlined" color="error" onClick={() => { setFileHash(''); setUploadMessage(''); setBaseAmount(''); setOcrData(null); setOcrApplied(false); setVerifications({}); }} disabled={ocrScanning}>
-                  ❌ Remove & Change Invoice
-                </Button>
-              )}
-              {uploadMessage && <Typography variant="body2" sx={{ display: 'inline-block', color: uploadMessage.startsWith('✅') ? 'success.main' : uploadMessage.startsWith('❌') ? 'error.main' : 'text.secondary' }}>{uploadMessage}</Typography>}
-              {fileHash && <Chip label="Document Attached" size="small" color="success" />}
-            </Box>
-            <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mb: 1 }}>
-              Supports: JPG, PNG, WEBP, GIF, BMP, TIFF, HEIC, PDF — Max 10MB
-            </Typography>
+    <Box sx={{ pb: 8 }}>
+      <PageHeader
+        eyebrow="Partner payout"
+        title="Submit an invoice"
+        subtitle="Attach your invoice, confirm your details and bank account, and we'll route it for approval. Every field is required unless marked optional."
+      />
+
+      {success && <Alert severity="success" sx={{ mb: 3 }}>Request submitted. Taking you back to the dashboard…</Alert>}
+      {error && <Alert severity="error" sx={{ mb: 3 }} onClose={() => setError(null)}>{error}</Alert>}
+
+      <Box component="form" onSubmit={handleSubmit} noValidate sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'minmax(0, 1fr) 340px' }, gap: 3, alignItems: 'start' }}>
+        <Box sx={{ display: 'grid', gap: 2.5, minWidth: 0 }}>
+
+          {/* ── 1. INVOICE ── */}
+          <SectionCard
+            id="sec-invoice" step={1} complete={done.invoice}
+            title="Invoice"
+            description="Upload your invoice and we'll read the key details for you. No invoice? Fill in the form and generate one from the summary panel."
+            badge={fileHash && <ToneChip tone="success" label="Attached" icon={<CheckCircleRounded />} />}
+          >
+            {!fileHash && !ocrScanning && (
+              <Box
+                component="label"
+                onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={(e) => { e.preventDefault(); setDragOver(false); if (e.dataTransfer.files?.[0]) handleFileUpload({ target: { files: e.dataTransfer.files } }); }}
+                sx={{
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', cursor: 'pointer',
+                  px: 3, py: 5, borderRadius: `${tokens.radius.lg}px`, border: '1.5px dashed',
+                  borderColor: dragOver ? tokens.accent : tokens.borderStrong,
+                  bgcolor: dragOver ? 'rgba(99,102,241,0.08)' : 'rgba(255,255,255,0.015)',
+                  transition: 'all .15s ease',
+                  '&:hover': { borderColor: 'rgba(99,102,241,0.6)', bgcolor: 'rgba(99,102,241,0.05)' },
+                  '&:focus-within': { boxShadow: tokens.focusRing },
+                }}
+              >
+                <input type="file" hidden accept="image/*,.webp,.heic,.heif,.pdf" onChange={handleFileUpload} />
+                <Box sx={{ width: 44, height: 44, borderRadius: '12px', display: 'grid', placeItems: 'center', mb: 1.5, bgcolor: 'rgba(99,102,241,0.14)', color: tokens.accentSoft }}>
+                  <CloudUploadRounded />
+                </Box>
+                <Typography variant="subtitle2">Drop your invoice here, or <Box component="span" sx={{ color: tokens.accentSoft }}>browse</Box></Typography>
+                <Typography variant="caption" sx={{ color: 'text.disabled', mt: 0.5 }}>PDF, JPG, PNG, WEBP, HEIC and more · up to 10 MB</Typography>
+              </Box>
+            )}
 
             {ocrScanning && (
-              <Paper sx={{ p: 3, mt: 2, display: 'flex', alignItems: 'center', gap: 3, borderRadius: 2, border: '1px solid rgba(99,102,241,0.2)', background: 'linear-gradient(135deg, rgba(99,102,241,0.03) 0%, rgba(139,92,246,0.03) 100%)' }}>
-                <CircularProgress size={30} thickness={5} sx={{ color: '#6366f1' }} />
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, p: 2.5, borderRadius: `${tokens.radius.lg}px`, border: `1px solid ${tones.accent.border}`, bgcolor: tones.accent.bg }}>
+                <CircularProgress size={26} thickness={5} />
                 <Box>
-                  <Typography variant="subtitle2" fontWeight={700} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <AutoAwesome sx={{ color: '#8b5cf6', fontSize: 18 }} /> High-Class AI OCR Scanning Active
+                  <Typography variant="subtitle2" sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                    <AutoAwesome sx={{ fontSize: 17, color: tones.violet.fg }} /> Reading your invoice
                   </Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    Extracting partner name, base amount, tax breakdowns, and handwriting...
-                  </Typography>
+                  <Typography variant="caption" sx={{ color: 'text.secondary' }}>Extracting partner name, amount, GST number and date…</Typography>
                 </Box>
-              </Paper>
+              </Box>
+            )}
+
+            {upload.text && !fileHash && !ocrScanning && (
+              <Alert severity={upload.tone} sx={{ mt: 2 }}>{upload.text}</Alert>
             )}
 
             {fileHash && !ocrScanning && (
-              <Grid container spacing={3} mt={0.5}>
-                {/* Left side: Preview */}
-                <Grid item xs={12} md={5}>
-                  <Box sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, overflow: 'hidden' }}>
-                    <Typography variant="caption" sx={{ p: 1, display: 'block', borderBottom: '1px solid rgba(255,255,255,0.08)', fontWeight: 600, color: 'text.secondary', bgcolor: 'rgba(255,255,255,0.02)' }}>
-                      📄 Uploaded Invoice Preview
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: ocrData ? '5fr 7fr' : '1fr' }, gap: 2 }}>
+                {/* Preview */}
+                <Box sx={{ border: `1px solid ${tokens.border}`, borderRadius: `${tokens.radius.lg}px`, overflow: 'hidden', bgcolor: tokens.surfaceSunken }}>
+                  <Box sx={{ px: 1.75, py: 1.25, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: `1px solid ${tokens.border}` }}>
+                    <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary', display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                      <DescriptionRounded sx={{ fontSize: 16 }} /> Your invoice
                     </Typography>
-                    <Box sx={{ p: 1.5, backgroundColor: 'rgba(0,0,0,0.2)', textAlign: 'center' }}>
-                      <AuthedFile name={fileHash}>
-                        {(fileUrl) => fileHash.toLowerCase().endsWith('.pdf') ? (
-                          <Box>
-                            <iframe src={fileUrl} title="Invoice PDF Preview" width="100%" height="200px" style={{ border: 'none', backgroundColor: '#fff', borderRadius: 4 }} />
-                            <Button variant="outlined" size="small" component="a" href={fileUrl} target="_blank" rel="noopener noreferrer" sx={{ mt: 1 }}>
-                              📂 Open PDF in New Tab
-                            </Button>
-                          </Box>
-                        ) : (
-                          <img
-                            src={fileUrl}
-                            alt="Invoice Preview"
-                            style={{ maxWidth: '100%', maxHeight: 200, borderRadius: 4, display: 'inline-block' }}
-                            onError={(e) => { e.target.style.display = 'none'; }}
-                          />
-                        )}
-                      </AuthedFile>
-                    </Box>
+                    <Button size="small" color="inherit" onClick={resetInvoice} startIcon={<SwapHorizRounded />} sx={{ color: 'text.secondary', minHeight: 28 }}>Replace</Button>
                   </Box>
-                </Grid>
-
-                {/* Right side: OCR Results Panel */}
-                {ocrData && (
-                  <Grid item xs={12} md={7}>
-                    <Paper sx={{ p: 2.5, borderRadius: 3, border: '1px solid rgba(99,102,241,0.25)', background: 'linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(139,92,246,0.08) 100%)', position: 'relative', overflow: 'hidden' }}>
-                      <style>{`
-                        @keyframes scan-line { 0% { top: 0%; } 50% { top: 100%; } 100% { top: 0%; } }
-                      `}</style>
-                      <Box sx={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '4px', background: 'linear-gradient(90deg, transparent, #8b5cf6, transparent)', animation: 'scan-line 3s infinite linear' }} />
-                      
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                        <Typography variant="subtitle2" sx={{ fontWeight: 800, color: 'primary.main', display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <AutoAwesome /> Auto-Detected Invoice Data
-                        </Typography>
-                        <Chip 
-                          label={ocrData.ocr_engine} 
-                          size="small" 
-                          sx={{ 
-                            background: ocrData.ocr_engine?.includes('Gemini') 
-                              ? 'linear-gradient(135deg, #6366f1, #8b5cf6)' 
-                              : 'rgba(255,255,255,0.08)',
-                            color: 'white', fontWeight: 700, fontSize: 10
-                          }} 
-                        />
-                      </Box>
-
-                      <Grid container spacing={2} mb={2.5}>
-                        <Grid item xs={6}>
-                          <Typography variant="caption" color="text.secondary" display="block">🤝 Partner Name</Typography>
-                          <Typography variant="body2" fontWeight={600} noWrap>{ocrData.vendor_name || 'Not detected'}</Typography>
-                        </Grid>
-                        <Grid item xs={6}>
-                          <Typography variant="caption" color="text.secondary" display="block">💰 Amount (Base)</Typography>
-                          <Typography variant="body2" fontWeight={600} sx={{ color: 'success.main' }}>
-                            ₹{ocrData.extracted_amount ? ocrData.extracted_amount.toLocaleString('en-IN') : '0.00'}
-                          </Typography>
-                        </Grid>
-                        <Grid item xs={6}>
-                          <Typography variant="caption" color="text.secondary" display="block">📅 Invoice Date</Typography>
-                          <Typography variant="body2" fontWeight={600}>{ocrData.invoice_date || 'Not detected'}</Typography>
-                        </Grid>
-                        <Grid item xs={6}>
-                          <Typography variant="caption" color="text.secondary" display="block">🔢 GST Number</Typography>
-                          <Typography variant="body2" fontWeight={600} sx={{ color: ocrData.gst_number ? 'primary.light' : 'text.disabled' }}>
-                            {ocrData.gst_number || 'No GST found'}
-                          </Typography>
-                        </Grid>
-                      </Grid>
-
-                      {/* Confidence Score */}
-                      <Box sx={{ mb: 2.5 }}>
-                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
-                          <Typography variant="caption" color="text.secondary">OCR Scan Confidence</Typography>
-                          <Typography variant="caption" fontWeight={700} sx={{ color: ocrData.ocr_confidence >= 80 ? 'success.main' : ocrData.ocr_confidence >= 50 ? 'warning.main' : 'error.main' }}>
-                            {ocrData.ocr_confidence}%
-                          </Typography>
-                        </Box>
-                        <Box sx={{ width: '100%', height: 6, bgcolor: 'rgba(255,255,255,0.06)', borderRadius: 3, overflow: 'hidden' }}>
-                          <Box sx={{ 
-                            width: `${ocrData.ocr_confidence}%`, height: '100%', borderRadius: 3,
-                            background: ocrData.ocr_confidence >= 80 
-                              ? 'linear-gradient(90deg, #10b981, #059669)' 
-                              : ocrData.ocr_confidence >= 50 
-                                ? 'linear-gradient(90deg, #f59e0b, #d97706)' 
-                                : 'linear-gradient(90deg, #ef4444, #dc2626)',
-                            transition: 'width 1s ease-out'
-                          }} />
-                        </Box>
-                      </Box>
-
-                      <Button 
-                        variant="contained" fullWidth onClick={applyOcrToForm}
-                        startIcon={<PlayForWork />}
-                        sx={{ py: 1, background: 'linear-gradient(135deg, #10b981, #059669)', fontWeight: 700, '&:hover': { background: 'linear-gradient(135deg, #059669, #047857)' } }}
-                      >
-                        ✨ Auto-fill Disbursement Form
-                      </Button>
-                    </Paper>
-                  </Grid>
-                )}
-              </Grid>
-            )}
-          </Box>
-
-          {/* ── OCR VERIFICATION STATUS BAR ── */}
-          {ocrApplied && Object.keys(verifications).length > 0 && (
-            <Paper sx={{ p: 2, mb: 3, borderRadius: 2, border: '1px solid rgba(99,102,241,0.3)', background: 'rgba(99,102,241,0.05)', display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-              <VerifiedUser sx={{ color: '#6366f1' }} />
-              <Box sx={{ flex: 1 }}>
-                <Typography variant="body2" fontWeight={700} sx={{ color: 'primary.main' }}>
-                  🔍 Second-Line Partner Verification Active
-                </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  Review each auto-filled field below — click ✓ to confirm accuracy or ✗ to flag for correction.
-                </Typography>
-              </Box>
-              <Box sx={{ display: 'flex', gap: 1 }}>
-                {verifiedCount > 0 && <Chip label={`✓ ${verifiedCount} Confirmed`} size="small" sx={{ bgcolor: 'rgba(16,185,129,0.15)', color: '#10b981', fontWeight: 700, border: '1px solid rgba(16,185,129,0.3)' }} />}
-                {flaggedCount > 0 && <Chip label={`✗ ${flaggedCount} Flagged`} size="small" sx={{ bgcolor: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 700, border: '1px solid rgba(239,68,68,0.3)' }} />}
-                {pendingCount > 0 && <Chip label={`? ${pendingCount} Pending`} size="small" sx={{ bgcolor: 'rgba(245,158,11,0.15)', color: '#f59e0b', fontWeight: 700, border: '1px solid rgba(245,158,11,0.3)' }} />}
-              </Box>
-            </Paper>
-          )}
-
-          {/* ── STEP 2: VENDOR DETAILS ── */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-            <Typography variant="h6" color="primary">2. Partner Details</Typography>
-            <Chip label="All Fields Mandatory ★" size="small" sx={{ bgcolor: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 700, fontSize: 10, border: '1px solid rgba(239,68,68,0.3)' }} />
-          </Box>
-          <Grid container spacing={3} mb={4}>
-            <Grid item xs={12} sm={6}>
-              <TextField 
-                fullWidth label="Partner Name" value={vendorName} 
-                onChange={(e) => setVendorName(e.target.value)} required
-                helperText={verifications['vendorName'] === false ? '⚠ Please correct this value' : verifications['vendorName'] === true ? '✓ Confirmed by partner' : ''}
-                FormHelperTextProps={{ sx: { color: verifications['vendorName'] === false ? '#ef4444' : '#10b981' } }}
-              />
-              <FieldVerifyBadge fieldKey="vendorName" verifications={verifications} onVerify={handleVerify} />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField 
-                fullWidth label="Company Name" value={companyName} 
-                onChange={(e) => setCompanyName(e.target.value)} required
-              />
-              <FieldVerifyBadge fieldKey="companyName" verifications={verifications} onVerify={handleVerify} />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField 
-                fullWidth 
-                required
-                label="Phone Number" 
-                value={phone} 
-                onChange={(e) => setPhone(e.target.value)}
-
-              />
-            </Grid>
-            <Grid item xs={12} sm={6}></Grid>
-            
-            <Grid item xs={12} sm={6}>
-              <Autocomplete
-                options={Object.keys(INDIA_CITIES)}
-                value={city || null}
-                onChange={(e, selectedCity) => {
-                  setCity(selectedCity || '');
-                  setState(selectedCity && INDIA_CITIES[selectedCity] ? INDIA_CITIES[selectedCity] : '');
-                }}
-                renderInput={(params) => (
-                  <TextField {...params} label="City / Location ★" required fullWidth />
-                )}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField fullWidth label="State (Auto-filled)" value={state} InputProps={{ readOnly: true }} />
-            </Grid>
-          </Grid>
-          <Divider sx={{ mb: 4 }} />
-
-          {/* ── STEP 3: PROJECT DETAILS ── */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-            <Typography variant="h6" color="primary">3. Project Details</Typography>
-            <Chip label="All Fields Mandatory ★" size="small" sx={{ bgcolor: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 700, fontSize: 10, border: '1px solid rgba(239,68,68,0.3)' }} />
-          </Box>
-          <Grid container spacing={3} mb={2}>
-            <Grid item xs={12} sm={6}>
-              {isPartner && lockedProject ? (
-                <TextField
-                  fullWidth required label="Project Name (locked)" value={projectName}
-                  InputProps={{ readOnly: true, startAdornment: <InputAdornment position="start"><Lock fontSize="small" color="action" /></InputAdornment> }}
-                  helperText="Locked for this login. Log out and log in again to submit for a different project."
-                />
-              ) : isPartner ? (
-                <Autocomplete
-                  options={activeProjects}
-                  getOptionLabel={(p) => (p.code ? `${p.name} (${p.code})` : p.name)}
-                  value={null}
-                  onChange={(e, p) => { if (p) setPendingLockProject(p); }}
-                  disabled={checkingLock || lockingProject}
-                  renderInput={(params) => (
-                    <TextField {...params} label="Project Name" required fullWidth
-                      helperText="Pick your project from the list. It is locked once chosen." />
-                  )}
-                />
-              ) : (
-                <Autocomplete
-                  freeSolo
-                  options={activeProjects.map((option) => option.code ? `${option.name} (${option.code})` : option.name)}
-                  value={projectName}
-                  onInputChange={handleProjectSelect}
-                  renderInput={(params) => (
-                    <TextField {...params} label="Project Name" required fullWidth />
-                  )}
-                />
-              )}
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <FormControl fullWidth required>
-                <InputLabel>Job Description</InputLabel>
-                <Select value={department} label="Job Description" onChange={(e) => setDepartment(e.target.value)}>
-                  {JOB_DESCRIPTIONS.map(jd => <MenuItem key={jd} value={jd}>{jd}</MenuItem>)}
-                </Select>
-              </FormControl>
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                required
-                label="Project Head"
-                placeholder="Type the name of the person heading this project"
-                value={selectedVerifier}
-                onChange={(e) => {
-                  setSelectedVerifier(e.target.value);
-                  setProjectHead(e.target.value);
-                }}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6}></Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField fullWidth required type="date" label="Start Date" value={startDate} onChange={(e) => setStartDate(e.target.value)} InputLabelProps={{ shrink: true }} />
-              <FieldVerifyBadge fieldKey="startDate" verifications={verifications} onVerify={handleVerify} />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField fullWidth required type="date" label="End Date" value={endDate} onChange={(e) => setEndDate(e.target.value)} InputLabelProps={{ shrink: true }} />
-            </Grid>
-          </Grid>
-
-          {/* ── PARTNER VERIFICATION STATUS ── */}
-          {selectedProject && selectedProject.partner_name && (
-            <Paper sx={{ p: 2.5, mb: 3, borderRadius: 2, border: '1px solid', borderColor: partnerNameMismatch ? 'error.main' : 'success.main', background: partnerNameMismatch ? 'rgba(239,68,68,0.05)' : 'rgba(16,185,129,0.05)' }}>
-              <Typography variant="subtitle2" fontWeight={700} mb={1.5} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                🔒 Partner Verification
-              </Typography>
-
-              {/* Partner Name Check */}
-              {selectedProject.partner_name && (
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                  {partnerNameMismatch ? (
-                    <Cancel sx={{ color: 'error.main', fontSize: 20 }} />
-                  ) : (
-                    <CheckCircle sx={{ color: 'success.main', fontSize: 20 }} />
-                  )}
-                  <Typography variant="body2">
-                    <strong>Name Match:</strong> Expected "{selectedProject.partner_name}"
-                    {partnerNameMismatch 
-                      ? <Chip label="MISMATCH" size="small" color="error" sx={{ ml: 1, fontWeight: 700, fontSize: 10 }} />
-                      : <Chip label="MATCHED" size="small" color="success" sx={{ ml: 1, fontWeight: 700, fontSize: 10 }} />
-                    }
-                  </Typography>
-                </Box>
-              )}
-
-              {partnerNameMismatch && (
-                <Typography variant="caption" color="error" sx={{ mt: 1.5, display: 'block', fontWeight: 600 }}>
-                  ⚠️ Your Partner Name must match "{selectedProject.partner_name}" to submit this invoice. This is an anti-fraud measure.
-                </Typography>
-              )}
-            </Paper>
-          )}
-
-
-          <Divider sx={{ mb: 4 }} />
-
-          {/* ── STEP 4: FINANCIAL DETAILS ── */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-            <Typography variant="h6" color="primary">4. Financial & GST Details</Typography>
-            <Chip label="All Fields Mandatory ★" size="small" sx={{ bgcolor: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 700, fontSize: 10, border: '1px solid rgba(239,68,68,0.3)' }} />
-          </Box>
-          <Grid container spacing={3} mb={2}>
-            <Grid item xs={12} sm={6}>
-              <TextField 
-                fullWidth required label="Advance Amount (enter 0 if none)" type="number" value={advanceAmount} 
-                onChange={(e) => setAdvanceAmount(e.target.value)}
-                InputProps={{ startAdornment: <InputAdornment position="start">₹</InputAdornment> }}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField 
-                fullWidth label="Base Invoice Amount" type="number" value={baseAmount} 
-                onChange={(e) => setBaseAmount(e.target.value)} required
-                InputProps={{ startAdornment: <InputAdornment position="start">₹</InputAdornment> }}
-              />
-              <FieldVerifyBadge fieldKey="baseAmount" verifications={verifications} onVerify={handleVerify} />
-            </Grid>
-            <Grid item xs={12}>
-              <FormControlLabel 
-                control={<Switch checked={isGst} onChange={(e) => setIsGst(e.target.checked)} color="primary" />} 
-                label={`Apply GST (Fixed 18%: ${state === OUR_COMPANY_STATE ? '9% CGST + 9% SGST' : state ? '18% IGST' : '18% IGST'})`} 
-              />
-            </Grid>
-          </Grid>
-
-          {isGst && (
-            <Box sx={{ p: 3, mb: 3, bgcolor: 'background.default', borderRadius: 2, border: '1px solid', borderColor: 'divider' }}>
-              <Grid container spacing={3}>
-                <Grid item xs={12} sm={6}>
-                  <TextField 
-                    fullWidth label="GST Number" value={gstNumber} 
-                    onChange={(e) => setGstNumber(e.target.value)} 
-                  />
-                  <FieldVerifyBadge fieldKey="gstNumber" verifications={verifications} onVerify={handleVerify} />
-                </Grid>
-                  <Grid item xs={12}>
-                    <Typography variant="body2" color="text.secondary">
-                      <strong>Calculated Tax:</strong> {state === OUR_COMPANY_STATE ? 'CGST (9%) + SGST (9%)' : 'IGST (18%)'} = ₹{gstAmount.toFixed(2)}
-                    </Typography>
-                  </Grid>
-              </Grid>
-            </Box>
-          )}
-
-          <Divider sx={{ mb: 4 }} />
-
-          {/* ── STEP 5: BANK & CANCELLED CHEQUE DETAILS ── */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, flexWrap: 'wrap' }}>
-            <Typography variant="h6" color="primary">5. Bank Details & Cancelled Cheque Upload</Typography>
-            <Chip label="Bank Fields Mandatory ★" size="small" sx={{ bgcolor: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 700, fontSize: 10, border: '1px solid rgba(239,68,68,0.3)' }} />
-            <Chip label="Cheque Upload Optional" size="small" sx={{ bgcolor: 'rgba(16,185,129,0.15)', color: '#10b981', fontWeight: 700, fontSize: 10, border: '1px solid rgba(16,185,129,0.3)' }} />
-          </Box>
-          <Grid container spacing={3} mb={4}>
-            <Grid item xs={12} sm={6}>
-              <TextField 
-                fullWidth required label="Beneficiary / Account Holder Name" value={beneficiaryName} 
-                onChange={(e) => setBeneficiaryName(e.target.value)} 
-                placeholder="Name as in Bank Account"
-              />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField 
-                fullWidth required label="Bank Name" value={bankName} 
-                onChange={(e) => setBankName(e.target.value)} 
-                placeholder="e.g. HDFC Bank, SBI, ICICI"
-              />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField 
-                fullWidth required label="Branch Name" value={branchName} 
-                onChange={(e) => setBranchName(e.target.value)} 
-                placeholder="e.g. Connaught Place, Mumbai Main"
-              />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField 
-                fullWidth required label="IFSC Code" value={ifscCode} 
-                onChange={(e) => setIfscCode(e.target.value.toUpperCase())} 
-                placeholder="e.g. HDFC0000123"
-                inputProps={{ maxLength: 11 }}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField 
-                fullWidth required label="Bank Account Number" value={accountNumber} 
-                onChange={(e) => setAccountNumber(e.target.value)} 
-                placeholder="e.g. 50100234567890"
-              />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <FormControl fullWidth required>
-                <InputLabel>Account Type</InputLabel>
-                <Select value={accountType} label="Account Type" onChange={(e) => setAccountType(e.target.value)}>
-                  <MenuItem value="Savings">Savings</MenuItem>
-                  <MenuItem value="Current">Current</MenuItem>
-                </Select>
-              </FormControl>
-            </Grid>
-            <Grid item xs={12}>
-              <Box sx={{ p: 2.5, border: '1px dashed rgba(16,185,129,0.4)', borderRadius: 2, bgcolor: 'rgba(16,185,129,0.02)' }}>
-                <Typography variant="subtitle2" color="success.main" mb={1.5} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  📸 Upload Cancelled Cheque / Any Bank Document (Image/PDF) — Optional
-                </Typography>
-                <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
-                  {!chequeFileHash ? (
-                    <Button variant="outlined" color="success" component="label" disabled={chequeUploading}>
-                      📁 Select Cheque Image/PDF
-                      <input type="file" hidden accept="image/*,.webp,.heic,.heif,.pdf" onChange={handleChequeUpload} />
-                    </Button>
-                  ) : (
-                    <>
-                      <AuthedFile name={chequeFileHash}>
-                        {(chequeUrl) => (
-                          <Button
-                            variant="outlined"
-                            color="primary"
-                            href={chequeUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            👁️ Preview Document
+                  <Box sx={{ p: 1.5, textAlign: 'center' }}>
+                    <AuthedFile name={fileHash}>
+                      {(fileUrl) => fileHash.toLowerCase().endsWith('.pdf') ? (
+                        <Box>
+                          <iframe src={fileUrl} title="Invoice PDF preview" width="100%" height="220px" style={{ border: 'none', backgroundColor: '#fff', borderRadius: 8 }} />
+                          <Button size="small" variant="outlined" component="a" href={fileUrl} target="_blank" rel="noopener noreferrer" endIcon={<OpenInNewRounded />} sx={{ mt: 1 }}>
+                            Open PDF
                           </Button>
-                        )}
-                      </AuthedFile>
-                      <Button variant="outlined" color="error" onClick={() => { setChequeFileHash(''); setChequeUploadMessage(''); }}>
-                        ❌ Remove Cancelled Cheque
-                      </Button>
-                    </>
-                  )}
-                  {chequeUploadMessage && (
-                    <Typography variant="body2" sx={{ color: chequeUploadMessage.startsWith('✅') ? 'success.main' : 'text.secondary' }}>
-                      {chequeUploadMessage}
+                        </Box>
+                      ) : (
+                        <img src={fileUrl} alt="Invoice preview" style={{ maxWidth: '100%', maxHeight: 240, borderRadius: 8, display: 'inline-block' }} onError={(e) => { e.target.style.display = 'none'; }} />
+                      )}
+                    </AuthedFile>
+                  </Box>
+                  {upload.text && (
+                    <Typography variant="caption" sx={{ display: 'block', px: 1.75, pb: 1.5, color: upload.tone === 'success' ? tones.success.fg : upload.tone === 'error' ? tones.danger.fg : 'text.secondary' }}>
+                      {upload.text}
                     </Typography>
                   )}
-                  {chequeFileHash && <Chip label="Cheque Scan Attached" size="small" color="success" />}
+                </Box>
+
+                {/* Detected data */}
+                {ocrData && (
+                  <Box sx={{ p: 2.25, borderRadius: `${tokens.radius.lg}px`, border: `1px solid ${tones.accent.border}`, background: 'linear-gradient(160deg, rgba(99,102,241,0.10), rgba(139,92,246,0.04))' }}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1, mb: 2 }}>
+                      <Typography variant="subtitle2" sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                        <AutoAwesome sx={{ fontSize: 17, color: tones.violet.fg }} /> Details we found
+                      </Typography>
+                      <Tooltip title={`Read by ${ocrData.ocr_engine}`}>
+                        <span><ToneChip tone={ocrData.ocr_confidence >= 80 ? 'success' : ocrData.ocr_confidence >= 50 ? 'warning' : 'danger'} label={`${ocrData.ocr_confidence}% confident`} /></span>
+                      </Tooltip>
+                    </Box>
+                    <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2, mb: 2 }}>
+                      <KeyValue label="Partner name" value={ocrData.vendor_name} strong />
+                      <KeyValue label="Base amount" value={ocrData.extracted_amount ? formatINR(ocrData.extracted_amount) : null} strong />
+                      <KeyValue label="Invoice date" value={ocrData.invoice_date} />
+                      <KeyValue label="GST number" value={ocrData.gst_number} mono />
+                    </Box>
+                    {ocrData.ocr_confidence < 50 && (
+                      <Alert severity="warning" sx={{ mb: 2, py: 0 }}>Low confidence — check every value before you submit.</Alert>
+                    )}
+                    <Button variant="contained" fullWidth onClick={applyOcrToForm} startIcon={<PlayForWork />} disabled={ocrApplied}>
+                      {ocrApplied ? 'Applied to the form' : 'Fill the form with these'}
+                    </Button>
+                  </Box>
+                )}
+              </Box>
+            )}
+
+            {/* Review bar after auto-fill */}
+            {ocrApplied && Object.keys(verifications).length > 0 && (
+              <Box sx={{ mt: 2, p: 1.75, borderRadius: `${tokens.radius.md}px`, border: `1px solid ${tones.accent.border}`, bgcolor: tones.accent.bg, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+                <VerifiedUser sx={{ color: tones.accent.fg, fontSize: 20 }} />
+                <Typography variant="body2" sx={{ flex: 1, minWidth: 200 }}>
+                  Check each auto-filled field below — confirm it, or flag it to fix.
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 0.75 }}>
+                  {verifiedCount > 0 && <ToneChip tone="success" label={`${verifiedCount} confirmed`} />}
+                  {flaggedCount > 0 && <ToneChip tone="danger" label={`${flaggedCount} flagged`} />}
+                  {pendingCount > 0 && <ToneChip tone="warning" label={`${pendingCount} to check`} />}
                 </Box>
               </Box>
-            </Grid>
-          </Grid>
+            )}
+          </SectionCard>
 
-          <Divider sx={{ mb: 4 }} />
-
-          {/* TOTALS DISPLAY */}
-          <Box sx={{ p: 3, mb: 4, bgcolor: 'primary.dark', color: 'white', borderRadius: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Box>
-              <Typography variant="body2" sx={{ opacity: 0.8 }}>GST Amount: ₹{gstAmount.toFixed(2)}</Typography>
-              <Typography variant="h5" fontWeight={700}>Total Amount: ₹{(totalAmount || parseFloat(baseAmount) || 0).toFixed(2)}</Typography>
-            </Box>
-            <Box sx={{ textAlign: 'right' }}>
-               <Typography variant="body2" sx={{ opacity: 0.8 }}>State: {state || 'Not specified'}</Typography>
-               {selectedVerifier && (
-                <Chip
-                  label={`Verifier: ${selectedVerifier}`}
-                  size="small"
-                  sx={{ mt: 0.5, bgcolor: 'rgba(255,255,255,0.2)', color: 'white' }}
+          {/* ── 2. PARTNER ── */}
+          <SectionCard id="sec-partner" step={2} complete={done.partner} title="Your details" description="Who is being paid, and where you're based. Your state decides how GST is split.">
+            <Grid container spacing={2.25}>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth label="Partner name" value={vendorName}
+                  onChange={(e) => setVendorName(e.target.value)} required
+                  error={verifications['vendorName'] === false}
+                  helperText={verifications['vendorName'] === false ? 'Please correct this value' : undefined}
                 />
-               )}
-            </Box>
-          </Box>
-
-          {/* BUSINESS PURPOSE */}
-          <Grid container spacing={3} mb={4}>
-            <Grid item xs={12}>
-              <TextField 
-                fullWidth required label="Business Purpose / Remarks" multiline rows={3}
-                value={purpose} onChange={(e) => setPurpose(e.target.value)}
-                placeholder="Brief description of the service rendered or items delivered."
-              />
-              <FieldVerifyBadge fieldKey="purpose" verifications={verifications} onVerify={handleVerify} />
+                <FieldVerifyBadge fieldKey="vendorName" verifications={verifications} onVerify={handleVerify} />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth label="Company name" value={companyName} onChange={(e) => setCompanyName(e.target.value)} required />
+                <FieldVerifyBadge fieldKey="companyName" verifications={verifications} onVerify={handleVerify} />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth required label="Phone number" value={phone} onChange={(e) => setPhone(e.target.value)} inputProps={{ inputMode: 'tel' }} />
+              </Grid>
+              <Grid item xs={12} sm={6} sx={{ display: { xs: 'none', sm: 'block' } }} />
+              <Grid item xs={12} sm={6}>
+                <Autocomplete
+                  options={Object.keys(INDIA_CITIES)}
+                  value={city || null}
+                  onChange={(e, selectedCity) => {
+                    setCity(selectedCity || '');
+                    setState(selectedCity && INDIA_CITIES[selectedCity] ? INDIA_CITIES[selectedCity] : '');
+                  }}
+                  renderInput={(params) => <TextField {...params} label="City" required fullWidth />}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth label="State" value={state} placeholder="Filled from your city" InputProps={{ readOnly: true }} InputLabelProps={{ shrink: true }} helperText={state ? (state === OUR_COMPANY_STATE ? 'Same state as AI Collective — CGST + SGST' : 'Inter-state — IGST') : ' '} />
+              </Grid>
             </Grid>
-          </Grid>
+          </SectionCard>
 
-          {/* VERIFIER SUMMARY */}
-          {selectedVerifier && (
-            <Box sx={{ mb: 3, p: 2.5, borderRadius: 2, border: '1px solid rgba(99,102,241,0.3)', background: 'rgba(99,102,241,0.05)', display: 'flex', alignItems: 'center', gap: 2 }}>
-              <CheckCircle sx={{ color: '#6366f1' }} />
-              <Box>
-                <Typography variant="body2" fontWeight={600}>
-                  Assigned to: {selectedVerifier}
-                </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  After verification → Finance (Yash) → Owner (Debojit) → Payment
+          {/* ── 3. PROJECT ── */}
+          <SectionCard id="sec-project" step={3} complete={done.project} title="Project" description="The project this work was for, and who's heading it.">
+            <Grid container spacing={2.25}>
+              <Grid item xs={12} sm={6}>
+                {isPartner && lockedProject ? (
+                  <TextField
+                    fullWidth required label="Project" value={projectName}
+                    InputProps={{ readOnly: true, startAdornment: <InputAdornment position="start"><Lock fontSize="small" sx={{ color: 'text.disabled' }} /></InputAdornment> }}
+                    helperText="Locked for this sign-in. Sign out and back in to submit for another project."
+                  />
+                ) : isPartner ? (
+                  <Autocomplete
+                    options={activeProjects}
+                    getOptionLabel={(p) => (p.code ? `${p.name} (${p.code})` : p.name)}
+                    renderOption={(props, p) => (
+                      <li {...props} key={p.id}>
+                        <Box sx={{ minWidth: 0 }}>
+                          <Typography variant="body2" sx={{ fontWeight: 520 }}>{p.name}</Typography>
+                          {p.code && <Code muted>{p.code}</Code>}
+                        </Box>
+                      </li>
+                    )}
+                    value={null}
+                    onChange={(e, p) => { if (p) setPendingLockProject(p); }}
+                    disabled={checkingLock || lockingProject}
+                    renderInput={(params) => (
+                      <TextField {...params} label="Project" required fullWidth helperText="Pick your project. It's locked once chosen." />
+                    )}
+                  />
+                ) : (
+                  <Autocomplete
+                    freeSolo
+                    options={activeProjects.map((option) => option.code ? `${option.name} (${option.code})` : option.name)}
+                    value={projectName}
+                    onInputChange={handleProjectSelect}
+                    renderInput={(params) => <TextField {...params} label="Project" required fullWidth />}
+                  />
+                )}
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <FormControl fullWidth required>
+                  <InputLabel>Your role on the project</InputLabel>
+                  <Select value={department} label="Your role on the project" onChange={(e) => setDepartment(e.target.value)}>
+                    {JOB_DESCRIPTIONS.map(jd => <MenuItem key={jd} value={jd}>{jd}</MenuItem>)}
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth required label="Project head"
+                  placeholder="Who is heading this project?"
+                  value={selectedVerifier}
+                  onChange={(e) => { setSelectedVerifier(e.target.value); setProjectHead(e.target.value); }}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6} sx={{ display: { xs: 'none', sm: 'block' } }} />
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth required type="date" label="Start date" value={startDate} onChange={(e) => setStartDate(e.target.value)} InputLabelProps={{ shrink: true }} />
+                <FieldVerifyBadge fieldKey="startDate" verifications={verifications} onVerify={handleVerify} />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth required type="date" label="End date" value={endDate} onChange={(e) => setEndDate(e.target.value)} InputLabelProps={{ shrink: true, }} inputProps={{ min: startDate || undefined }} />
+              </Grid>
+            </Grid>
+
+            {/* Partner name check against the project's authorized partner */}
+            {selectedProject && selectedProject.partner_name && (
+              <Alert
+                severity={partnerNameMismatch ? 'error' : 'success'}
+                icon={partnerNameMismatch ? <Cancel /> : <CheckCircle />}
+                sx={{ mt: 2.5 }}
+              >
+                {partnerNameMismatch
+                  ? <>Your partner name must match <strong>{selectedProject.partner_name}</strong>, the authorized partner for this project.</>
+                  : <>Partner name matches the authorized partner for this project.</>}
+              </Alert>
+            )}
+          </SectionCard>
+
+          {/* ── 4. AMOUNT ── */}
+          <SectionCard id="sec-amount" step={4} complete={done.amount} title="Amount & GST" description="Enter the amount before tax. Turn on GST if you're registered — we'll calculate it at 18%.">
+            <Grid container spacing={2.25}>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth label="Base amount" type="number" value={baseAmount}
+                  onChange={(e) => setBaseAmount(e.target.value)} required
+                  error={verifications['baseAmount'] === false}
+                  InputProps={{ startAdornment: <InputAdornment position="start">₹</InputAdornment> }}
+                  inputProps={{ min: 0, step: '0.01' }}
+                />
+                <FieldVerifyBadge fieldKey="baseAmount" verifications={verifications} onVerify={handleVerify} />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth required label="Advance already received" type="number" value={advanceAmount}
+                  onChange={(e) => setAdvanceAmount(e.target.value)}
+                  helperText="Enter 0 if none"
+                  InputProps={{ startAdornment: <InputAdornment position="start">₹</InputAdornment> }}
+                  inputProps={{ min: 0, step: '0.01' }}
+                />
+              </Grid>
+            </Grid>
+
+            <Box sx={{ mt: 2.5, p: 2, borderRadius: `${tokens.radius.md}px`, border: `1px solid ${isGst ? tones.accent.border : tokens.border}`, bgcolor: isGst ? 'rgba(99,102,241,0.05)' : 'transparent', transition: 'all .15s ease' }}>
+              <FormControlLabel
+                sx={{ m: 0, width: '100%', justifyContent: 'space-between' }}
+                labelPlacement="start"
+                control={<Switch checked={isGst} onChange={(e) => setIsGst(e.target.checked)} />}
+                label={
+                  <Box>
+                    <Typography variant="subtitle2">I'm GST registered</Typography>
+                    <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                      18% — {state === OUR_COMPANY_STATE ? '9% CGST + 9% SGST' : 'IGST'}{!state && ' (pick your city to confirm)'}
+                    </Typography>
+                  </Box>
+                }
+              />
+              {isGst && (
+                <Grid container spacing={2.25} sx={{ mt: 0.5 }}>
+                  <Grid item xs={12} sm={6}>
+                    <TextField
+                      fullWidth required label="GST number" value={gstNumber}
+                      onChange={(e) => setGstNumber(e.target.value.toUpperCase())}
+                      placeholder="e.g. 09ABCDE1234F1Z5"
+                      inputProps={{ maxLength: 15, style: { fontFamily: tokens.mono, letterSpacing: '0.02em' } }}
+                    />
+                    <FieldVerifyBadge fieldKey="gstNumber" verifications={verifications} onVerify={handleVerify} />
+                  </Grid>
+                  <Grid item xs={12} sm={6} sx={{ display: 'flex', alignItems: 'center' }}>
+                    <KeyValue label={state === OUR_COMPANY_STATE ? 'CGST (9%) + SGST (9%)' : 'IGST (18%)'} value={formatINR(gstAmount)} strong />
+                  </Grid>
+                </Grid>
+              )}
+            </Box>
+          </SectionCard>
+
+          {/* ── 5. BANK ── */}
+          <SectionCard id="sec-bank" step={5} complete={done.bank} title="Bank details" description="Where we'll send the payment. Double-check the account number and IFSC.">
+            <Grid container spacing={2.25}>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth required label="Account holder name" value={beneficiaryName} onChange={(e) => setBeneficiaryName(e.target.value)} placeholder="As shown on your bank account" />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth required label="Bank" value={bankName} onChange={(e) => setBankName(e.target.value)} placeholder="e.g. HDFC Bank" />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth required label="Account number" value={accountNumber} onChange={(e) => setAccountNumber(e.target.value.replace(/\s/g, ''))} inputProps={{ inputMode: 'numeric', style: { fontFamily: tokens.mono } }} />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth required label="IFSC code" value={ifscCode}
+                  onChange={(e) => setIfscCode(e.target.value.toUpperCase())}
+                  placeholder="e.g. HDFC0000123"
+                  error={ifscCode.length > 0 && ifscCode.length !== 11}
+                  helperText={ifscCode.length > 0 && ifscCode.length !== 11 ? `IFSC codes are 11 characters (${ifscCode.length}/11)` : ' '}
+                  inputProps={{ maxLength: 11, style: { fontFamily: tokens.mono, letterSpacing: '0.02em' } }}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth required label="Branch" value={branchName} onChange={(e) => setBranchName(e.target.value)} placeholder="e.g. Sector 18, Noida" />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <FormControl fullWidth required>
+                  <InputLabel>Account type</InputLabel>
+                  <Select value={accountType} label="Account type" onChange={(e) => setAccountType(e.target.value)}>
+                    <MenuItem value="Savings">Savings</MenuItem>
+                    <MenuItem value="Current">Current</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+            </Grid>
+
+            {/* Optional cancelled cheque */}
+            <Box sx={{ mt: 2.5, p: 2, borderRadius: `${tokens.radius.md}px`, border: `1px dashed ${tokens.borderStrong}`, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+              <Box sx={{ width: 36, height: 36, borderRadius: '10px', display: 'grid', placeItems: 'center', bgcolor: 'rgba(255,255,255,0.04)', color: 'text.secondary' }}>
+                <AccountBalanceRounded fontSize="small" />
+              </Box>
+              <Box sx={{ flex: 1, minWidth: 180 }}>
+                <Typography variant="subtitle2">Cancelled cheque <Box component="span" sx={{ color: 'text.disabled', fontWeight: 400 }}>· optional</Box></Typography>
+                <Typography variant="caption" sx={{ color: cheque.tone === 'error' ? tones.danger.fg : 'text.secondary' }}>
+                  {cheque.text || 'Speeds up verification of your bank account.'}
                 </Typography>
               </Box>
-            </Box>
-          )}
-
-          {/* REQUIRED FIELDS SUMMARY */}
-          <Paper sx={{ p: 2.5, mb: 3, borderRadius: 2, bgcolor: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.25)' }}>
-            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 800, display: 'block', mb: 1.5, letterSpacing: 0.5, textTransform: 'uppercase' }}>
-              📋 Form Completion Checklist (All Mandatory)
-            </Typography>
-            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-              <Chip
-                label={`1. Invoice File: ${fileHash ? '✓ Attached' : 'Missing (required)'}`} size="small"
-                sx={{ bgcolor: fileHash ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: fileHash ? '#10b981' : '#ef4444', fontWeight: 700 }}
-              />
-              <Chip 
-                label={`2. Partner Details: ${vendorName && companyName && phone && city ? '✓ Complete' : 'Incomplete'}`} size="small"
-                sx={{ bgcolor: (vendorName && companyName && phone && city) ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: (vendorName && companyName && phone && city) ? '#10b981' : '#ef4444', fontWeight: 700 }}
-              />
-              <Chip 
-                label={`3. Project Details: ${projectName && department && selectedVerifier && startDate && endDate ? '✓ Complete' : 'Incomplete'}`} size="small"
-                sx={{ bgcolor: (projectName && department && selectedVerifier && startDate && endDate) ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: (projectName && department && selectedVerifier && startDate && endDate) ? '#10b981' : '#ef4444', fontWeight: 700 }}
-              />
-              <Chip 
-                label={`4. Financials: ${baseAmount && advanceAmount ? '✓ Complete' : 'Incomplete'}`} size="small"
-                sx={{ bgcolor: (baseAmount && advanceAmount) ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: (baseAmount && advanceAmount) ? '#10b981' : '#ef4444', fontWeight: 700 }}
-              />
-              <Chip
-                label={`5. Bank Details: ${beneficiaryName && bankName && branchName && ifscCode && accountNumber ? '✓ Complete' : 'Incomplete'}`} size="small"
-                sx={{ bgcolor: (beneficiaryName && bankName && branchName && ifscCode && accountNumber) ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: (beneficiaryName && bankName && branchName && ifscCode && accountNumber) ? '#10b981' : '#ef4444', fontWeight: 700 }}
-              />
-              <Chip 
-                label={`6. Remarks: ${purpose.trim() ? '✓ Added' : 'Missing'}`} size="small"
-                sx={{ bgcolor: purpose.trim() ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: purpose.trim() ? '#10b981' : '#ef4444', fontWeight: 700 }}
-              />
-            </Box>
-          </Paper>
-
-          {/* GENERATE INVOICE FROM TYPED DETAILS — for partners without a real invoice document */}
-          <Paper sx={{
-            p: 2.5, mb: 3, borderRadius: 2,
-            bgcolor: fileHash ? 'rgba(16,185,129,0.06)' : 'rgba(245,158,11,0.06)',
-            border: `1px dashed ${fileHash ? 'rgba(16,185,129,0.4)' : 'rgba(245,158,11,0.4)'}`
-          }}>
-            {fileHash ? (
-              <>
-                <Typography variant="subtitle2" fontWeight={700} color="success.main" mb={0.5}>
-                  ✅ Invoice attached to this request
-                </Typography>
-                <Typography variant="caption" color="text.secondary" display="block" mb={1.5}>
-                  See the preview in "1. Upload Partner Invoice" above. Remove it there if you'd like to attach a different one.
-                </Typography>
-                <AuthedFile name={fileHash}>
-                  {(fileUrl) => (
-                    <Button
-                      variant="outlined" size="small" color="primary"
-                      href={fileUrl} target="_blank" rel="noopener noreferrer"
-                    >
-                      👁️ Preview Attached Invoice
-                    </Button>
-                  )}
-                </AuthedFile>
-              </>
-            ) : (
-              <>
-                <Typography variant="subtitle2" fontWeight={700} mb={0.5}>
-                  🧾 Don't have an invoice document?
-                </Typography>
-                <Typography variant="caption" color="text.secondary" display="block" mb={1.5}>
-                  Not everyone has the means to produce a formal invoice. Fill in your Partner Name and Base Amount above, then generate one automatically from the details you've typed into this form.
-                </Typography>
-                <Button
-                  variant="outlined"
-                  color="warning"
-                  onClick={handleGenerateInvoice}
-                  disabled={generatingInvoice}
-                >
-                  {generatingInvoice ? <CircularProgress size={20} /> : '🧾 Generate Invoice from Details'}
+              {!chequeFileHash ? (
+                <Button variant="outlined" component="label" disabled={chequeUploading} startIcon={chequeUploading ? <CircularProgress size={14} /> : <UploadFileRounded />}>
+                  {chequeUploading ? 'Uploading…' : 'Upload'}
+                  <input type="file" hidden accept="image/*,.webp,.heic,.heif,.pdf" onChange={handleChequeUpload} />
                 </Button>
-                {uploadMessage && (
-                  <Typography variant="body2" sx={{ mt: 1.5, color: uploadMessage.startsWith('✅') ? 'success.main' : uploadMessage.startsWith('❌') ? 'error.main' : 'text.secondary' }}>
-                    {uploadMessage}
-                  </Typography>
-                )}
-              </>
-            )}
+              ) : (
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  <AuthedFile name={chequeFileHash}>
+                    {(chequeUrl) => (
+                      <Button variant="outlined" href={chequeUrl} target="_blank" rel="noopener noreferrer" endIcon={<OpenInNewRounded />}>View</Button>
+                    )}
+                  </AuthedFile>
+                  <Button color="inherit" sx={{ color: 'text.secondary' }} onClick={() => { setChequeFileHash(''); setChequeUploadMessage(''); }}>Remove</Button>
+                </Box>
+              )}
+            </Box>
+          </SectionCard>
+
+          {/* ── 6. DESCRIPTION ── */}
+          <SectionCard id="sec-remarks" step={6} complete={done.remarks} title="Description" description="A short note on the work delivered — this appears on the request your approvers see.">
+            <TextField
+              fullWidth required label="What was delivered?" multiline minRows={3}
+              value={purpose} onChange={(e) => setPurpose(e.target.value)}
+              placeholder="e.g. AI video edit for the Diwali campaign — 3 cutdowns (30s, 15s, 6s)"
+              inputProps={{ maxLength: 500 }}
+              helperText={`${purpose.length}/500`}
+            />
+            <FieldVerifyBadge fieldKey="purpose" verifications={verifications} onVerify={handleVerify} />
+          </SectionCard>
+        </Box>
+
+        {/* ── SUMMARY (sticky on desktop) ── */}
+        <Box sx={{ position: { lg: 'sticky' }, top: { lg: 80 }, display: 'grid', gap: 2 }}>
+          <Paper sx={{ p: 2.75, overflow: 'hidden', position: 'relative' }}>
+            <Box aria-hidden sx={{ position: 'absolute', inset: 0, background: 'radial-gradient(400px 180px at 100% 0%, rgba(99,102,241,0.16), transparent 70%)', pointerEvents: 'none' }} />
+            <Box sx={{ position: 'relative' }}>
+              <Typography variant="caption" sx={{ color: 'text.secondary' }}>Total payable</Typography>
+              <Typography sx={{ fontSize: 34, fontWeight: 650, letterSpacing: '-0.035em', lineHeight: 1.15, mt: 0.25, fontFeatureSettings: '"tnum"' }}>
+                {formatINR(total)}
+              </Typography>
+              <Box sx={{ display: 'grid', gap: 0.75, mt: 2, pt: 2, borderTop: `1px solid ${tokens.border}` }}>
+                {[
+                  ['Base amount', formatINR(parseFloat(baseAmount) || 0)],
+                  [isGst ? (state === OUR_COMPANY_STATE ? 'CGST + SGST' : 'IGST') : 'GST', isGst ? formatINR(gstAmount) : 'Not applied'],
+                  ['Advance received', formatINR(parseFloat(advanceAmount) || 0)],
+                ].map(([k, v]) => (
+                  <Box key={k} sx={{ display: 'flex', justifyContent: 'space-between', gap: 2 }}>
+                    <Typography variant="body2" sx={{ color: 'text.secondary' }}>{k}</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 520, fontFeatureSettings: '"tnum"' }}>{v}</Typography>
+                  </Box>
+                ))}
+              </Box>
+            </Box>
           </Paper>
 
-          <Button
-            type="submit" variant="contained" color="primary" size="large" fullWidth
-            disabled={loading || success || checkingLock || lockingProject || !fileHash} sx={{ py: 1.5, fontSize: '1.1rem' }}
-          >
-            {loading ? <CircularProgress size={24} color="inherit" /> : '🚀 Submit Disbursement Request'}
-          </Button>
+          <ChecklistCard items={checklist} done={done} />
+
+          {/* Generate an invoice when the partner has no document */}
           {!fileHash && (
-            <Typography variant="caption" color="error" display="block" textAlign="center" mt={1}>
-              Attach an invoice to submit: upload it in Step 1, or use "Generate Invoice from Details" above.
-            </Typography>
+            <Paper sx={{ p: 2.5, borderColor: tones.warning.border, bgcolor: 'rgba(245,158,11,0.04)' }}>
+              <Typography variant="subtitle2" sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                <ReceiptLongRounded sx={{ fontSize: 18, color: tones.warning.fg }} /> No invoice document?
+              </Typography>
+              <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mt: 0.5, mb: 1.5 }}>
+                Fill in your name and amount, then we'll generate a numbered invoice from this form and attach it.
+              </Typography>
+              <Button variant="outlined" color="warning" fullWidth onClick={handleGenerateInvoice} disabled={generatingInvoice} startIcon={generatingInvoice ? <CircularProgress size={14} color="inherit" /> : <AutoAwesome />}>
+                {generatingInvoice ? 'Generating…' : 'Generate invoice'}
+              </Button>
+              {upload.text && (
+                <Typography variant="caption" sx={{ display: 'block', mt: 1.25, color: upload.tone === 'error' ? tones.danger.fg : 'text.secondary' }}>{upload.text}</Typography>
+              )}
+            </Paper>
           )}
-        </form>
-      </Paper>
+
+          <Box>
+            <Button
+              type="submit" variant="contained" size="large" fullWidth
+              disabled={loading || success || checkingLock || lockingProject || !fileHash}
+              endIcon={!loading && <ArrowForwardRounded />}
+              sx={{ minHeight: 50, fontSize: 15 }}
+            >
+              {loading ? <CircularProgress size={22} color="inherit" /> : 'Submit for approval'}
+            </Button>
+            <Typography variant="caption" sx={{ display: 'block', textAlign: 'center', mt: 1.25, color: !fileHash ? tones.warning.fg : 'text.disabled' }}>
+              {!fileHash
+                ? 'Attach or generate an invoice to submit.'
+                : 'Next: owner approval → finance check → payment'}
+            </Typography>
+          </Box>
+        </Box>
+      </Box>
 
       <Dialog open={!!pendingLockProject} onClose={() => setPendingLockProject(null)} maxWidth="xs" fullWidth>
-        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}><Lock fontSize="small" /> Lock this project?</DialogTitle>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}><Lock fontSize="small" /> Use this project?</DialogTitle>
         <DialogContent>
-          <Typography variant="body2" mb={1.5}>
-            <strong>{pendingLockProject && (pendingLockProject.code ? `${pendingLockProject.name} (${pendingLockProject.code})` : pendingLockProject.name)}</strong>
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            The project is locked for this login. You can't change it until you log out and log in again.
+          <Paper sx={{ p: 1.75, mb: 2, bgcolor: tokens.surfaceSunken }}>
+            <Typography variant="body2" sx={{ fontWeight: 600 }}>{pendingLockProject?.name}</Typography>
+            {pendingLockProject?.code && <Code muted>{pendingLockProject.code}</Code>}
+          </Paper>
+          <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+            The project is locked for this sign-in. To submit for a different project, sign out and sign in again.
           </Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setPendingLockProject(null)}>Cancel</Button>
+          <Button color="inherit" onClick={() => setPendingLockProject(null)}>Cancel</Button>
           <Button variant="contained" startIcon={<Lock />} onClick={confirmProjectLock}>Lock project</Button>
         </DialogActions>
       </Dialog>
