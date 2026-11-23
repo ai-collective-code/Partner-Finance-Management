@@ -1,17 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Box, Typography, Paper, Table, TableHead, TableRow, TableCell, TableBody,
-  Chip, Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField,
-  Stepper, Step, StepLabel, Alert, CircularProgress, Divider, Avatar, Tooltip, Grid, MenuItem
+  Box, Typography, Paper, Table, TableHead, TableRow, TableCell, TableBody, TableContainer,
+  Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField, IconButton, Skeleton,
+  Alert, CircularProgress, Divider, Tooltip, Grid, MenuItem, Tabs, Tab, ToggleButton, ToggleButtonGroup,
+  useMediaQuery, useTheme,
 } from '@mui/material';
 import {
-  AccountBalance, CheckCircle, Cancel, Send, Visibility,
-  CurrencyRupee, Person, Schedule, Gavel, VerifiedUser, Receipt
+  AccountBalance, CheckCircle, Cancel, Send, Gavel, Receipt,
+  CloseRounded, OpenInNewRounded, AddRounded, EditRounded, TaskAltRounded, FolderOpenRounded,
+  InboxRounded, PendingActionsRounded, HourglassTopRounded, PaymentsRounded,
 } from '@mui/icons-material';
 
 import { useApi } from '../hooks/useApi';
 import { useSelector } from 'react-redux';
 import AuthedFile from '../components/AuthedFile';
+import { ActivityList } from '../components/RequestDrawer';
+import {
+  PageHeader, StatCard, StatusChip, PipelineStepper, KeyValue, SectionLabel, Code, Person, EmptyState, Surface, ToneChip, RequestCardList,
+} from '../components/ui';
+import { formatINR, formatINRCompact, formatDate, formatDateTime, formatRelative, parseMetadata } from '../utils/format';
+import { tokens, tones } from '../theme';
 
 // Today's date as YYYY-MM-DD in the user's local time zone
 const todayLocal = () => {
@@ -32,43 +40,12 @@ const suggestProjectTag = (name, details) => {
 };
 const TAG_RE = /^[A-Z][A-Z0-9]{1,5}$/;
 
-// New workflow: PND → VRF → OWN → FIN → DSB
-const STATUS_FLOW = ['PND', 'OWN', 'FIN', 'DSB'];
-
-const statusLabel = (s) => ({
-  PND: 'Pending Review',
-  VRF: '🔍 1st Line Verified (legacy)',
-  FIN: '💼 Finance Review',
-  OWN: '👑 Owner Auth',
-  DSB: '✅ Disbursed',
-  REJ: '❌ Rejected'
-}[s] || s);
-
-const statusColor = (s) => ({
-  PND: 'warning',
-  VRF: 'info',
-  FIN: 'primary',
-  OWN: 'secondary',
-  DSB: 'success',
-  REJ: 'error'
-}[s] || 'default');
-
-const stepIndex = (s) => Math.max(0, STATUS_FLOW.indexOf(s));
-
 // The 4 first-line verifiers (Soumana replaces Sukanya)
 const VERIFIER_MAP = {
   rup:     { name: 'Rup',     title: 'Tech Head',           color: '#3b82f6' },
   debojit: { name: 'Debojit', title: 'Creative Head & Owner', color: '#8b5cf6' },
   yash:    { name: 'Yash',    title: 'Finance Head',        color: '#22c55e' },
   soumana:  { name: 'Soumana',  title: 'Content Head',        color: '#f59e0b' },
-};
-
-// Parse metadata safely
-const parseMetadata = (req) => {
-  try {
-    if (req.metadata) return JSON.parse(req.metadata);
-  } catch { /* ignore */ }
-  return null;
 };
 
 const FinanceReview = () => {
@@ -103,6 +80,10 @@ const FinanceReview = () => {
   const [projectSuccess, setProjectSuccess] = useState('');
   const [projectError, setProjectError] = useState('');
   const [editingProjectId, setEditingProjectId] = useState(null);
+  const [confirmComplete, setConfirmComplete] = useState(null);
+  const theme = useTheme();
+  const fullScreenDialog = useMediaQuery(theme.breakpoints.down('md'));
+  const isPhone = useMediaQuery(theme.breakpoints.down('sm'));
 
   // Comments history state
   const [comments, setComments] = useState([]);
@@ -207,13 +188,13 @@ const FinanceReview = () => {
       });
       if (res.ok) {
         const stateLabels = {
-          VRF: 'sent for 1st-line verification ✅',
-          OWN: 'forwarded to Owner 👑',
-          FIN: 'forwarded to Finance 💼',
-          DSB: 'disbursed ✅',
-          REJ: 'rejected ❌'
+          VRF: 'verified',
+          OWN: 'approved and sent to finance',
+          FIN: 'cleared for payment',
+          DSB: 'marked as paid',
+          REJ: 'rejected'
         };
-        setActionResult({ type: 'success', msg: `Request ${stateLabels[nextState] || nextState}!` });
+        setActionResult({ type: 'success', msg: `Done — request ${stateLabels[nextState] || nextState}.` });
         setComment('');
         // Re-fetch comments to show the new comment immediately
         const cRes = await apiFetch(`/api/audit?reqId=${selected.id}`);
@@ -231,8 +212,13 @@ const FinanceReview = () => {
     finally { setActionLoading(false); }
   };
 
-  const filtered = filterStatus === 'all' ? requests : requests.filter(r => r.status === filterStatus);
-  const pendingCount = requests.filter(r => ['PND', 'VRF', 'OWN', 'FIN'].includes(r.status)).length;
+  // 'mine' = waiting on this person; 'PND' also covers legacy VRF requests (both await the owner)
+  const filtered = requests.filter(r => {
+    if (filterStatus === 'all') return true;
+    if (filterStatus === 'mine') return actionsFor(r).length > 0;
+    if (filterStatus === 'PND') return r.status === 'PND' || r.status === 'VRF';
+    return r.status === filterStatus;
+  });
 
   const handleCreateProject = async (e) => {
     e.preventDefault();
@@ -323,688 +309,528 @@ const FinanceReview = () => {
 
   const getVerifierInfo = (req) => {
     if (!req.verifier) return null;
-    return VERIFIER_MAP[req.verifier] || { name: req.verifier, title: 'Verifier', color: '#6366f1' };
+    return VERIFIER_MAP[req.verifier] || { name: req.verifier, title: 'Project head' };
   };
+
+  // Who can act on a request right now, and with which buttons
+  function actionsFor(req) {
+    if (!req) return [];
+    const s = req.status;
+    if ((s === 'PND' || s === 'VRF') && isOwner) {
+      return [
+        { state: 'REJ', label: 'Reject', variant: 'outlined', color: 'error', icon: <Cancel /> },
+        { state: 'OWN', label: 'Approve', variant: 'contained', color: 'primary', icon: <Gavel /> },
+      ];
+    }
+    if (s === 'OWN' && isFin) {
+      return [
+        { state: 'REJ', label: 'Reject', variant: 'outlined', color: 'error', icon: <Cancel /> },
+        { state: 'FIN', label: 'Clear for payment', variant: 'contained', color: 'primary', icon: <Send /> },
+      ];
+    }
+    if (s === 'FIN' && isStrictFin) {
+      return [{ state: 'DSB', label: 'Mark as paid', variant: 'contained', color: 'success', icon: <CheckCircle /> }];
+    }
+    return [];
+  }
+
+  const guidance = (req) => {
+    if (!req) return null;
+    const s = req.status;
+    if (s === 'PND' && isOwner) return { tone: 'info', text: 'New request. Approve it to send it to finance, or reject it with a reason.' };
+    if (s === 'VRF' && isOwner) return { tone: 'info', text: 'Submitted before the first-line check was removed. Approve it to send it to finance, or reject it.' };
+    if (s === 'OWN' && isFin) return { tone: 'info', text: 'Owner approved. Check the invoice, GST and bank details, then clear it for payment.' };
+    if (s === 'FIN' && isStrictFin) return { tone: 'success', text: 'All approvals are in. Mark it paid once the transfer has gone out.' };
+    if (s === 'DSB') return { tone: 'success', text: 'This request has been paid.' };
+    if (s === 'REJ') return { tone: 'error', text: 'This request was rejected.' };
+    return { tone: 'info', text: 'Nothing for you to do on this one right now.' };
+  };
+
+  const counts = requests.reduce((acc, r) => { acc[r.status] = (acc[r.status] || 0) + 1; return acc; }, {});
+  const FILTER_TABS = [
+    { key: 'all', label: 'All', count: requests.length },
+    { key: 'PND', label: 'Awaiting owner', count: (counts.PND || 0) },
+    { key: 'OWN', label: 'With finance', count: counts.OWN || 0 },
+    { key: 'FIN', label: 'Ready to pay', count: counts.FIN || 0 },
+    { key: 'DSB', label: 'Paid', count: counts.DSB || 0 },
+    { key: 'REJ', label: 'Rejected', count: counts.REJ || 0 },
+    ...(counts.VRF ? [{ key: 'VRF', label: 'Verified (legacy)', count: counts.VRF }] : []),
+  ];
+  const myQueue = requests.filter(r => actionsFor(r).length > 0);
+  const actionable = selected ? actionsFor(selected) : [];
+  const hint = guidance(selected);
+  const openReview = (req) => { setSelected(req); setComment(''); setActionResult(null); };
 
   return (
     <Box>
-      {/* Header */}
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3, flexWrap: 'wrap', gap: 2 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-          <AccountBalance sx={{ color: '#6366f1', fontSize: 28 }} />
-          <Box>
-            <Typography variant="h4" fontWeight={700}>Finance Review Center</Typography>
-            <Typography variant="body2" color="text.secondary">
-              Review vendor invoices through the 5-stage approval workflow
-            </Typography>
-          </Box>
-        </Box>
-        <Box sx={{ display: 'flex', gap: 2 }}>
-          {isFin && (
-            <Button variant={activeTab === 'requests' ? 'contained' : 'outlined'} onClick={() => setActiveTab('requests')}>Requests</Button>
-          )}
-          {isFin && (
-            <Button variant={activeTab === 'projects' ? 'contained' : 'outlined'} onClick={() => setActiveTab('projects')}>Projects</Button>
-          )}
-          {pendingCount > 0 && activeTab === 'requests' && (
-            <Chip
-              label={`${pendingCount} Pending Action${pendingCount > 1 ? 's' : ''}`}
-              color="warning" icon={<Schedule />}
-              sx={{ fontWeight: 700 }}
-            />
-          )}
-        </Box>
-      </Box>
+      <PageHeader
+        title="Approvals"
+        subtitle="Review partner invoices and salary requests, approve them, and record payouts."
+        actions={isFin && (
+          <ToggleButtonGroup size="small" exclusive value={activeTab} onChange={(e, v) => v && setActiveTab(v)} aria-label="Section">
+            <ToggleButton value="requests">Requests</ToggleButton>
+            <ToggleButton value="projects">Projects</ToggleButton>
+          </ToggleButtonGroup>
+        )}
+      />
 
       {activeTab === 'projects' && isFin && (
-        <Paper sx={{ p: 4, borderRadius: 3 }}>
-          <Typography variant="h5" mb={3}>Project Management</Typography>
-          {projectSuccess && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setProjectSuccess('')}>{projectSuccess}</Alert>}
-          {projectError && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setProjectError('')}>{projectError}</Alert>}
-          <Box component="form" onSubmit={handleCreateProject} sx={{ mb: 2 }}>
-            <Box sx={{ display: 'flex', gap: 2, mb: 2, flexWrap: 'wrap' }}>
-              <TextField label="Project Name" value={newProjectName} onChange={e => setNewProjectName(e.target.value)} required />
-              <TextField
-                label="Client Code" value={newClientCode} required disabled={!!editingProjectId}
-                onChange={e => { setClientCodeTouched(true); setNewClientCode(e.target.value.replace(/[^A-Za-z]/g, '').slice(0, 5).toUpperCase()); }}
-                helperText={editingProjectId ? ' ' : '2-5 letters, e.g. DAB for Dabur'} sx={{ width: 160 }}
-              />
-              <TextField
-                label="Project Tag" value={newProjectTag} required disabled={!!editingProjectId}
-                onChange={e => { setProjectTagTouched(true); setNewProjectTag(e.target.value.replace(/[^A-Za-z0-9]/g, '').slice(0, 6).toUpperCase()); }}
-                helperText={editingProjectId ? ' ' : 'Product / campaign, e.g. AMLA'} sx={{ width: 170 }}
-              />
-              <TextField
-                select label="Project Type" value={newProjectType} required disabled={!!editingProjectId}
-                onChange={e => setNewProjectType(e.target.value)} helperText=" " sx={{ width: 220 }}
-              >
-                {projectTypes.map(t => <MenuItem key={t.code} value={t.code}>{t.code} – {t.label}</MenuItem>)}
-              </TextField>
-              <TextField
-                type="date" label="Start Date" value={newStartDate} required disabled={!!editingProjectId}
-                onChange={e => setNewStartDate(e.target.value)} InputLabelProps={{ shrink: true }} helperText=" " sx={{ width: 180 }}
-              />
-              <TextField
-                label="Project Code" value={newProjectCode} placeholder="Fill the fields to generate"
-                InputProps={{ readOnly: true }} InputLabelProps={{ shrink: true }}
-                helperText={editingProjectId ? 'Codes cannot be changed after creation' : 'Auto-generated, unique'}
-                sx={{ minWidth: 330, '& input': { fontFamily: 'monospace', fontWeight: 700 } }}
-              />
-            </Box>
-            <Box sx={{ display: 'flex', gap: 2, mb: 2, flexWrap: 'wrap' }}>
-              <TextField label="Details" value={newProjectDetails} onChange={e => setNewProjectDetails(e.target.value)} sx={{ flexGrow: 1 }} />
-            </Box>
-            <Box sx={{ display: 'flex', gap: 2, mb: 2, flexWrap: 'wrap', alignItems: 'center' }}>
-              <TextField label="Partner Name" value={newPartnerName} onChange={e => setNewPartnerName(e.target.value)} placeholder="Authorized partner name" />
-              <TextField label="Partner Phone" value={newPartnerPhone} onChange={e => setNewPartnerPhone(e.target.value)} placeholder="+91 XXXXXXXXXX" />
-              <Button type="submit" variant="contained" color={editingProjectId ? "secondary" : "primary"} disabled={projectLoading || (!editingProjectId && !newProjectCode)}>
-                {editingProjectId ? 'Save Changes' : 'Create Project'}
-              </Button>
-              {editingProjectId && (
-                <Button variant="outlined" color="inherit" onClick={handleCancelEditProject}>
-                  Cancel
+        <Box sx={{ display: 'grid', gap: 2.5 }}>
+          <Surface
+            title={editingProjectId ? 'Edit project' : 'New project'}
+            subtitle={editingProjectId ? 'The project code is fixed once created; you can change everything else.' : 'Projects get a unique code that partners pick when they submit an invoice.'}
+            action={editingProjectId && <Button color="inherit" onClick={handleCancelEditProject} sx={{ color: 'text.secondary' }}>Cancel edit</Button>}
+          >
+            {projectSuccess && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setProjectSuccess('')}>{projectSuccess}</Alert>}
+            {projectError && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setProjectError('')}>{projectError}</Alert>}
+            <Box component="form" onSubmit={handleCreateProject}>
+              <Grid container spacing={2}>
+                <Grid item xs={12} md={6}>
+                  <TextField fullWidth label="Project name" value={newProjectName} onChange={e => setNewProjectName(e.target.value)} required placeholder="e.g. Dabur Amla Hair Oil" />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField fullWidth label="Details" value={newProjectDetails} onChange={e => setNewProjectDetails(e.target.value)} placeholder="Scope, deliverables, notes" />
+                </Grid>
+                <Grid item xs={6} sm={3}>
+                  <TextField
+                    fullWidth label="Client code" value={newClientCode} required disabled={!!editingProjectId}
+                    onChange={e => { setClientCodeTouched(true); setNewClientCode(e.target.value.replace(/[^A-Za-z]/g, '').slice(0, 5).toUpperCase()); }}
+                    helperText={editingProjectId ? ' ' : '2–5 letters, e.g. DAB'}
+                    inputProps={{ style: { fontFamily: tokens.mono } }}
+                  />
+                </Grid>
+                <Grid item xs={6} sm={3}>
+                  <TextField
+                    fullWidth label="Project tag" value={newProjectTag} required disabled={!!editingProjectId}
+                    onChange={e => { setProjectTagTouched(true); setNewProjectTag(e.target.value.replace(/[^A-Za-z0-9]/g, '').slice(0, 6).toUpperCase()); }}
+                    helperText={editingProjectId ? ' ' : 'Product or campaign'}
+                    inputProps={{ style: { fontFamily: tokens.mono } }}
+                  />
+                </Grid>
+                <Grid item xs={6} sm={3}>
+                  <TextField select fullWidth label="Type" value={newProjectType} required disabled={!!editingProjectId} onChange={e => setNewProjectType(e.target.value)} helperText=" ">
+                    {projectTypes.map(t => <MenuItem key={t.code} value={t.code}>{t.label}</MenuItem>)}
+                  </TextField>
+                </Grid>
+                <Grid item xs={6} sm={3}>
+                  <TextField fullWidth type="date" label="Start date" value={newStartDate} required disabled={!!editingProjectId} onChange={e => setNewStartDate(e.target.value)} InputLabelProps={{ shrink: true }} helperText=" " />
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <TextField fullWidth label="Authorized partner name" value={newPartnerName} onChange={e => setNewPartnerName(e.target.value)} placeholder="Only this partner can submit for the project" />
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <TextField fullWidth label="Partner phone" value={newPartnerPhone} onChange={e => setNewPartnerPhone(e.target.value)} placeholder="+91 98765 43210" />
+                </Grid>
+              </Grid>
+
+              <Box sx={{ mt: 2.5, p: 2, borderRadius: `${tokens.radius.md}px`, bgcolor: tokens.surfaceSunken, border: `1px solid ${tokens.border}`, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+                <Box sx={{ flex: 1, minWidth: 220 }}>
+                  <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block' }}>
+                    {editingProjectId ? 'Project code' : 'Code this project will get'}
+                  </Typography>
+                  <Typography sx={{ fontFamily: tokens.mono, fontWeight: 600, fontSize: 15, color: newProjectCode ? 'text.primary' : 'text.disabled', mt: 0.25, wordBreak: 'break-all' }}>
+                    {newProjectCode || 'Fill in client code, tag, type and date'}
+                  </Typography>
+                </Box>
+                <Button type="submit" variant="contained" disabled={projectLoading || (!editingProjectId && !newProjectCode)} startIcon={projectLoading ? <CircularProgress size={14} color="inherit" /> : editingProjectId ? <CheckCircle /> : <AddRounded />}>
+                  {editingProjectId ? 'Save changes' : 'Create project'}
                 </Button>
-              )}
+              </Box>
+              <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block', mt: 1.5 }}>
+                The partner name is checked when invoices are submitted — only the matching partner can submit for this project.
+              </Typography>
             </Box>
-          </Box>
-          <Typography variant="caption" color="warning.main" sx={{ display: 'block', mb: 3 }}>
-            ⚠️ Partner Name & Phone are used for anti-fraud verification. Only the matching partner can submit invoices for this project.
-          </Typography>
-          <Typography variant="h6" mb={2}>Active Projects</Typography>
-          <Table>
-            <TableHead><TableRow><TableCell>Name</TableCell><TableCell>Code</TableCell><TableCell>Partner</TableCell><TableCell>Phone</TableCell><TableCell>Details</TableCell><TableCell>Start</TableCell><TableCell>Action</TableCell></TableRow></TableHead>
-            <TableBody>
-              {projects.map(p => (
-                <TableRow key={p.id}>
-                  <TableCell><strong>{p.name}</strong></TableCell>
-                  <TableCell>
-                    <Chip label={p.code} size="small" sx={{ fontFamily: 'monospace' }} />
-                    {p.project_type && (
-                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-                        {(projectTypes.find(t => t.code === p.project_type) || {}).label || p.project_type}
-                      </Typography>
-                    )}
-                  </TableCell>
-                  <TableCell>{p.partner_name || <Typography variant="caption" color="text.disabled">Not set</Typography>}</TableCell>
-                  <TableCell>{p.partner_phone || <Typography variant="caption" color="text.disabled">Not set</Typography>}</TableCell>
-                  <TableCell>{p.details}</TableCell>
-                  <TableCell>{p.start_date ? new Date(p.start_date + 'T00:00:00').toLocaleDateString() : new Date(p.created_at).toLocaleDateString()}</TableCell>
-                  <TableCell>
-                    <Box sx={{ display: 'flex', gap: 1 }}>
-                      <Button size="small" variant="outlined" color="primary" onClick={() => handleStartEditProject(p)}>Edit</Button>
-                      <Button size="small" color="success" onClick={() => handleCompleteProject(p.id)}>Mark Completed</Button>
-                    </Box>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {projects.length === 0 && <TableRow><TableCell colSpan={7} align="center">No active projects.</TableCell></TableRow>}
-            </TableBody>
-          </Table>
-          <Typography variant="caption" color="text.secondary" sx={{ mt: 2, display: 'block' }}>* Completed projects will automatically be deleted after 30 days.</Typography>
-        </Paper>
+          </Surface>
+
+          <Paper sx={{ overflow: 'hidden' }}>
+            <Box sx={{ px: 3, py: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: `1px solid ${tokens.border}` }}>
+              <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Active projects</Typography>
+              <ToneChip tone="neutral" label={`${projects.length}`} />
+            </Box>
+            <TableContainer>
+              <Table sx={{ minWidth: 720 }}>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Project</TableCell>
+                    <TableCell>Partner</TableCell>
+                    <TableCell>Start</TableCell>
+                    <TableCell align="right">Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {projects.map(p => (
+                    <TableRow key={p.id} hover selected={editingProjectId === p.id}>
+                      <TableCell sx={{ maxWidth: 360 }}>
+                        <Typography variant="body2" sx={{ fontWeight: 560 }}>{p.name}</Typography>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.25, flexWrap: 'wrap' }}>
+                          <Code muted>{p.code}</Code>
+                          {p.project_type && <Typography variant="caption" sx={{ color: 'text.disabled' }}>· {(projectTypes.find(t => t.code === p.project_type) || {}).label || p.project_type}</Typography>}
+                        </Box>
+                        {p.details && <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mt: 0.5 }} noWrap>{p.details}</Typography>}
+                      </TableCell>
+                      <TableCell>
+                        {p.partner_name
+                          ? <Person name={p.partner_name} sub={p.partner_phone} />
+                          : <Typography variant="body2" sx={{ color: 'text.disabled' }}>Any partner</Typography>}
+                      </TableCell>
+                      <TableCell sx={{ whiteSpace: 'nowrap', color: 'text.secondary' }}>{formatDate(p.start_date || p.created_at)}</TableCell>
+                      <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                        <Button size="small" variant="outlined" startIcon={<EditRounded />} onClick={() => handleStartEditProject(p)} sx={{ mr: 1 }}>Edit</Button>
+                        <Button size="small" color="success" startIcon={<TaskAltRounded />} onClick={() => setConfirmComplete(p)}>Complete</Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+            {projects.length === 0 && (
+              <EmptyState compact icon={<FolderOpenRounded />} title="No active projects" description="Create a project above so partners can submit invoices against it." />
+            )}
+          </Paper>
+        </Box>
       )}
 
       {activeTab === 'requests' && (
         <>
-      {/* Workflow Legend */}
-      <Paper sx={{ p: 2, mb: 3, borderRadius: 3, background: 'rgba(99,102,241,0.05)', border: '1px solid rgba(99,102,241,0.15)' }}>
-        <Typography variant="caption" color="primary" sx={{ fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase' }}>
-          Approval Pipeline
-        </Typography>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1, flexWrap: 'wrap' }}>
-          {[
-            { label: '🤝 Partner Submits', state: 'PND', color: '#f59e0b' },
-            { arrow: true },
-            { label: '👑 Owner Auth', state: 'OWN', color: '#8b5cf6', sub: 'Debojit (Creative Head & Owner)' },
-            { arrow: true },
-            { label: '💼 Finance Review', state: 'FIN', color: '#6366f1', sub: 'Yash (Finance Head)' },
-            { arrow: true },
-            { label: '✅ Payment', state: 'DSB', color: '#22c55e' },
-          ].map((step, i) =>
-            step.arrow ? (
-              <Typography key={i} sx={{ color: 'text.disabled', fontWeight: 700, fontSize: 16 }}>→</Typography>
+          {/* Stats */}
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(4, 1fr)' }, gap: 2, mb: 3 }}>
+            <StatCard label="Waiting on you" value={myQueue.length} icon={<PendingActionsRounded />} tone="warning" loading={loading}
+              hint={myQueue.length ? `${formatINRCompact(myQueue.reduce((s, r) => s + (Number(r.amount) || 0), 0))} to review` : 'All caught up'}
+              onClick={() => setFilterStatus('mine')} active={filterStatus === 'mine'} />
+            <StatCard label="Awaiting owner" value={(counts.PND || 0) + (counts.VRF || 0)} icon={<HourglassTopRounded />} tone="violet" loading={loading}
+              onClick={() => setFilterStatus('PND')} active={filterStatus === 'PND'} />
+            <StatCard label="With finance" value={counts.OWN || 0} icon={<AccountBalance />} tone="accent" loading={loading}
+              onClick={() => setFilterStatus('OWN')} active={filterStatus === 'OWN'} />
+            <StatCard label="Paid" value={counts.DSB || 0} icon={<PaymentsRounded />} tone="success" loading={loading}
+              hint={formatINRCompact(requests.filter(r => r.status === 'DSB').reduce((s, r) => s + (Number(r.amount) || 0), 0)) + ' paid out'}
+              onClick={() => setFilterStatus('DSB')} active={filterStatus === 'DSB'} />
+          </Box>
+
+          <Paper sx={{ overflow: 'hidden' }}>
+            {/* Filters */}
+            <Box sx={{ px: 1.5, borderBottom: `1px solid ${tokens.border}`, overflowX: 'auto' }}>
+              <Tabs value={filterStatus === 'mine' ? false : filterStatus} onChange={(e, v) => setFilterStatus(v)} variant="scrollable" scrollButtons={false} aria-label="Filter by status">
+                {FILTER_TABS.map(t => (
+                  <Tab
+                    key={t.key} value={t.key}
+                    label={
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                        {t.label}
+                        <Box component="span" sx={{ px: 0.75, minWidth: 20, borderRadius: '6px', fontSize: 11.5, fontWeight: 600, lineHeight: '18px', bgcolor: 'rgba(255,255,255,0.06)', color: 'text.secondary', fontFeatureSettings: '"tnum"' }}>{t.count}</Box>
+                      </Box>
+                    }
+                  />
+                ))}
+              </Tabs>
+            </Box>
+            {filterStatus === 'mine' && (
+              <Box sx={{ px: 2.5, py: 1.25, display: 'flex', alignItems: 'center', gap: 1, bgcolor: tones.warning.bg, borderBottom: `1px solid ${tokens.border}` }}>
+                <Typography variant="body2" sx={{ flex: 1 }}>Showing requests that are waiting on you.</Typography>
+                <Button size="small" color="inherit" onClick={() => setFilterStatus('all')}>Show all</Button>
+              </Box>
+            )}
+
+            {isPhone ? (
+              <RequestCardList
+                rows={filtered} loading={loading} onSelect={openReview}
+                renderAside={(req) => (
+                  <Box sx={{ textAlign: 'right' }}>
+                    <Typography variant="body2" sx={{ fontWeight: 650, fontFeatureSettings: '"tnum"', whiteSpace: 'nowrap' }}>{formatINR(req.amount)}</Typography>
+                    {actionsFor(req).length > 0 && <Typography variant="caption" sx={{ color: '#FBBF24', fontWeight: 600 }}>Review</Typography>}
+                  </Box>
+                )}
+              />
             ) : (
-              <Tooltip key={i} title={step.sub || ''} arrow>
-                <Box sx={{ textAlign: 'center' }}>
-                  <Chip label={step.label} size="small"
-                    sx={{ bgcolor: `${step.color}22`, color: step.color, border: `1px solid ${step.color}55`, fontWeight: 600, mb: 0.3 }} />
-                  {step.sub && <Typography variant="caption" display="block" color="text.disabled" sx={{ fontSize: 10 }}>{step.sub}</Typography>}
-                </Box>
-              </Tooltip>
-            )
-          )}
-        </Box>
-      </Paper>
-
-      {/* Stats Row */}
-      <Box sx={{ display: 'flex', gap: 2, mb: 3, flexWrap: 'wrap' }}>
-        {[
-          { label: 'Total', value: requests.length, color: '#6366f1' },
-          { label: 'Pending', value: requests.filter(r => r.status === 'PND').length, color: '#f59e0b' },
-          { label: '1st Verified (legacy)', value: requests.filter(r => r.status === 'VRF').length, color: '#3b82f6' },
-          { label: 'Owner Auth', value: requests.filter(r => r.status === 'OWN').length, color: '#8b5cf6' },
-          { label: 'Finance Review', value: requests.filter(r => r.status === 'FIN').length, color: '#6366f1' },
-          { label: 'Disbursed', value: requests.filter(r => r.status === 'DSB').length, color: '#22c55e' },
-        ].map(s => (
-          <Paper key={s.label} sx={{ p: 1.5, flex: '1 0 100px', borderRadius: 2, border: `1px solid ${s.color}33`, textAlign: 'center' }}>
-            <Typography variant="h5" fontWeight={700} sx={{ color: s.color }}>{s.value}</Typography>
-            <Typography variant="caption" color="text.secondary">{s.label}</Typography>
-          </Paper>
-        ))}
-      </Box>
-
-      {/* Filter Tabs */}
-      <Box sx={{ display: 'flex', gap: 1, mb: 2, flexWrap: 'wrap' }}>
-        {['all', 'PND', 'VRF', 'FIN', 'OWN', 'DSB', 'REJ'].map(s => (
-          <Chip
-            key={s} label={s === 'all' ? 'All' : statusLabel(s)}
-            onClick={() => setFilterStatus(s)}
-            color={filterStatus === s ? 'primary' : 'default'}
-            variant={filterStatus === s ? 'filled' : 'outlined'}
-            size="small" sx={{ cursor: 'pointer' }}
-          />
-        ))}
-      </Box>
-
-      {/* Requests Table */}
-      {loading ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}><CircularProgress /></Box>
-      ) : (
-        <Paper sx={{ borderRadius: 3, border: '1px solid rgba(255,255,255,0.06)', overflowX: 'auto' }}>
-          <Table>
-            <TableHead>
-              <TableRow sx={{ backgroundColor: 'rgba(99,102,241,0.1)' }}>
-                <TableCell>Request ID</TableCell>
-                <TableCell>Purpose</TableCell>
-                <TableCell>Verifier</TableCell>
-                <TableCell>Amount</TableCell>
-                <TableCell>Date</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell>Workflow</TableCell>
-                <TableCell align="right">Action</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {filtered.length === 0 && (
-                <TableRow><TableCell colSpan={8} align="center" sx={{ py: 6, color: 'text.disabled' }}>
-                  No requests found
-                </TableCell></TableRow>
-              )}
-              {filtered.map((req) => {
-                const vInfo = getVerifierInfo(req);
-                return (
-                  <TableRow key={req.id} sx={{ '&:hover': { backgroundColor: 'rgba(255,255,255,0.02)' } }}>
-                    <TableCell sx={{ fontFamily: 'monospace', fontSize: 12 }}>
-                      {req.id}
-                      {req.invoice_code && (
-                        <Typography variant="caption" display="block" color="primary.light" sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
-                          {req.invoice_code}
-                        </Typography>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Tooltip title={req.purpose}>
-                        <Typography variant="body2" noWrap sx={{ maxWidth: 140 }}>{req.purpose}</Typography>
-                      </Tooltip>
-                    </TableCell>
-                    <TableCell>
-                      {vInfo ? (
-                        <Chip
-                          avatar={<Avatar sx={{ bgcolor: vInfo.color, width: 20, height: 20, fontSize: 11 }}>{vInfo.name.charAt(0)}</Avatar>}
-                          label={vInfo.name}
-                          size="small"
-                          sx={{ bgcolor: `${vInfo.color}22`, color: vInfo.color, border: `1px solid ${vInfo.color}44` }}
-                        />
-                      ) : <Typography variant="caption" color="text.disabled">—</Typography>}
-                    </TableCell>
-                    <TableCell>
-                      <Typography fontWeight={700} color="primary.light">₹{req.amount?.toLocaleString()}</Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="caption" color="text.secondary">
-                        {new Date(req.ts).toLocaleDateString('en-IN')}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Chip label={statusLabel(req.status)} color={statusColor(req.status)} size="small" />
-                    </TableCell>
-                    <TableCell>
-                      <Stepper activeStep={stepIndex(req.status)} sx={{ '& .MuiStepLabel-label': { fontSize: 9 }, minWidth: 240 }}>
-                        {['Submit', 'Owner', 'Finance', 'Paid'].map(l => (
-                          <Step key={l}><StepLabel>{l}</StepLabel></Step>
-                        ))}
-                      </Stepper>
-                    </TableCell>
-                    <TableCell align="right">
-                      <Button size="small" startIcon={<Visibility />} onClick={() => { setSelected(req); setComment(''); setActionResult(null); }}>
-                        Review
-                      </Button>
-                    </TableCell>
+            <TableContainer>
+              <Table sx={{ minWidth: 560 }} aria-label="Requests to review">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Request</TableCell>
+                    <TableCell align="right">Amount</TableCell>
+                    <TableCell>Status</TableCell>
+                    <TableCell sx={{ display: { xs: 'none', lg: 'table-cell' } }}>Project head</TableCell>
+                    <TableCell>Submitted</TableCell>
+                    <TableCell align="right" />
                   </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </Paper>
-      )}
+                </TableHead>
+                <TableBody>
+                  {loading && [0, 1, 2, 3].map(i => (
+                    <TableRow key={i}>{[240, 80, 110, 90, 70, 70].map((w, j) => <TableCell key={j} sx={j === 3 ? { display: { xs: 'none', lg: 'table-cell' } } : undefined}><Skeleton width={w} /></TableCell>)}</TableRow>
+                  ))}
+                  {!loading && filtered.map((req) => {
+                    const canAct = actionsFor(req).length > 0;
+                    return (
+                      <TableRow key={req.id} hover onClick={() => openReview(req)} sx={{ cursor: 'pointer' }}>
+                        <TableCell sx={{ maxWidth: { xs: 220, md: 240, lg: 340 } }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            {canAct && <Box aria-label="Needs your action" sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: '#FBBF24', flexShrink: 0, boxShadow: '0 0 0 3px rgba(251,191,36,0.15)' }} />}
+                            <Typography variant="body2" noWrap sx={{ fontWeight: 540 }}>{req.purpose}</Typography>
+                          </Box>
+                          <Box sx={{ display: 'flex', gap: 1, mt: 0.25, pl: canAct ? 2 : 0 }}>
+                            <Code muted>{req.id}</Code>
+                            {req.invoice_code && <Code muted sx={{ color: 'text.disabled' }}>· {req.invoice_code}</Code>}
+                          </Box>
+                        </TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 600, fontFeatureSettings: '"tnum"', whiteSpace: 'nowrap' }}>{formatINR(req.amount)}</TableCell>
+                        <TableCell><StatusChip status={req.status} /></TableCell>
+                        <TableCell sx={{ display: { xs: 'none', lg: 'table-cell' } }}><Person name={getVerifierInfo(req)?.name} /></TableCell>
+                        <TableCell sx={{ whiteSpace: 'nowrap', color: 'text.secondary' }}>
+                          <Tooltip title={formatDate(req.ts)}><span>{formatRelative(req.ts)}</span></Tooltip>
+                        </TableCell>
+                        <TableCell align="right">
+                          <Button size="small" variant={canAct ? 'contained' : 'text'} color={canAct ? 'primary' : 'inherit'}
+                            onClick={(e) => { e.stopPropagation(); openReview(req); }}
+                            sx={!canAct ? { color: 'text.secondary' } : undefined}>
+                            {canAct ? 'Review' : 'View'}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </TableContainer>
+            )}
+            {!loading && filtered.length === 0 && (
+              <EmptyState
+                icon={<InboxRounded />}
+                title={filterStatus === 'mine' ? "You're all caught up" : 'No requests here'}
+                description={filterStatus === 'mine' ? 'Nothing is waiting on you right now.' : 'Requests with this status will appear here.'}
+              />
+            )}
+          </Paper>
         </>
       )}
 
-      {/* ═══════════════════════════════════════════════════════════════════════ */}
-      {/* REVIEW DIALOG — Formatted Invoice View + Original Invoice Image       */}
-      {/* ═══════════════════════════════════════════════════════════════════════ */}
-      <Dialog open={!!selected} onClose={() => setSelected(null)} maxWidth="md" fullWidth
-        PaperProps={{ sx: { borderRadius: 3, background: '#111827', border: '1px solid rgba(255,255,255,0.1)' } }}>
+      {/* ═════════════ REVIEW DIALOG ═════════════ */}
+      <Dialog open={!!selected} onClose={() => setSelected(null)} maxWidth="lg" fullWidth fullScreen={fullScreenDialog} scroll="paper">
         {selected && (() => {
-          const vInfo = getVerifierInfo(selected);
           const meta = parseMetadata(selected);
+          const isSalary = meta?.type === 'salary';
+          const isPdf = selected.file_hash && selected.file_hash.toLowerCase().endsWith('.pdf');
           return (
             <>
-              <DialogTitle>
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <Box>
-                    <Typography fontWeight={700}>Review: {selected.id}</Typography>
-                    {selected.invoice_code && (
-                      <Typography variant="caption" color="primary.light" sx={{ fontFamily: 'monospace' }}>
-                        Invoice code: {selected.invoice_code}
-                      </Typography>
-                    )}
+              <DialogTitle sx={{ display: 'flex', alignItems: 'flex-start', gap: 2, borderBottom: `1px solid ${tokens.border}`, pb: 2 }}>
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, flexWrap: 'wrap', mb: 0.5 }}>
+                    <Code muted sx={{ whiteSpace: 'nowrap' }}>{selected.id}</Code>
+                    {selected.invoice_code && <Code muted sx={{ color: 'text.disabled', whiteSpace: 'nowrap' }}>· {selected.invoice_code}</Code>}
                   </Box>
-                  <Chip label={statusLabel(selected.status)} color={statusColor(selected.status)} size="small" />
+                  <Typography variant="h6" component="span" sx={{ display: 'block' }}>{selected.purpose}</Typography>
+                  <Box sx={{ display: { xs: 'block', sm: 'none' }, mt: 1 }}><StatusChip status={selected.status} /></Box>
                 </Box>
+                <Box sx={{ display: { xs: 'none', sm: 'block' } }}><StatusChip status={selected.status} /></Box>
+                <IconButton onClick={() => setSelected(null)} aria-label="Close" sx={{ mt: -0.5, mr: -1 }}><CloseRounded /></IconButton>
               </DialogTitle>
-              <DialogContent>
-                 {/* Workflow Stepper */}
-                <Stepper activeStep={stepIndex(selected.status)} sx={{ mb: 3 }}>
-                  {['Submitted', 'Owner Auth', 'Finance', 'Disbursed'].map(l => (
-                    <Step key={l}><StepLabel sx={{ '& .MuiStepLabel-label': { fontSize: 11 } }}>{l}</StepLabel></Step>
-                  ))}
-                </Stepper>
-                <Divider sx={{ mb: 3, borderColor: 'rgba(255,255,255,0.08)' }} />
 
-                {/* ── FORMATTED INVOICE SECTION ── */}
-                {meta && (
-                  <Paper sx={{ p: 3, mb: 3, borderRadius: 3, border: '1px solid rgba(99,102,241,0.2)', background: 'rgba(99,102,241,0.03)' }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-                      <Receipt sx={{ color: '#6366f1' }} />
-                      <Typography variant="h6" fontWeight={700} color="primary.light">{meta.type === 'salary' ? 'Salary Request Details' : 'Invoice Details'}</Typography>
+              <DialogContent sx={{ p: 0 }}>
+                <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'minmax(0, 7fr) minmax(0, 5fr)' }, minHeight: '100%' }}>
+                  {/* Left — the request */}
+                  <Box sx={{ p: 3, display: 'grid', gap: 3, alignContent: 'start', borderRight: { md: `1px solid ${tokens.border}` } }}>
+                    <Box sx={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap' }}>
+                      <Box>
+                        <Typography variant="caption" sx={{ color: 'text.secondary' }}>{isSalary ? 'Net payable' : 'Total payable'}</Typography>
+                        <Typography sx={{ fontSize: 32, fontWeight: 650, letterSpacing: '-0.03em', lineHeight: 1.15, fontFeatureSettings: '"tnum"' }}>
+                          {formatINR(meta?.totalAmount || meta?.netAmount || selected.amount)}
+                        </Typography>
+                        <Typography variant="caption" sx={{ color: 'text.disabled' }}>Submitted {formatDateTime(selected.ts)}</Typography>
+                      </Box>
                     </Box>
 
-                    {meta.type === 'salary' ? (
-                      <>
-                        {/* Employee Info */}
-                        <Typography variant="overline" color="text.disabled" sx={{ letterSpacing: 1 }}>Employee Information</Typography>
-                        <Grid container spacing={2} sx={{ mb: 2 }}>
-                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Name</Typography><Typography variant="body2" fontWeight={600}>{meta.employeeName || '—'}</Typography></Grid>
-                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Employee ID</Typography><Typography variant="body2" fontWeight={600}>{meta.employeeCode || '—'}</Typography></Grid>
-                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Phone</Typography><Typography variant="body2">{meta.phone || '—'}</Typography></Grid>
-                          <Grid item xs={3}><Typography variant="caption" color="text.secondary">City</Typography><Typography variant="body2">{meta.city || '—'}</Typography></Grid>
-                          <Grid item xs={3}><Typography variant="caption" color="text.secondary">State</Typography><Typography variant="body2">{meta.state || '—'}</Typography></Grid>
-                        </Grid>
-                        <Divider sx={{ my: 1.5, borderColor: 'rgba(255,255,255,0.06)' }} />
+                    <Box sx={{ p: 2, borderRadius: `${tokens.radius.lg}px`, border: `1px solid ${tokens.border}`, bgcolor: tokens.surfaceSunken }}>
+                      {selected.status === 'REJ'
+                        ? <Typography variant="body2" sx={{ color: 'text.secondary' }}>This request was rejected. See the activity for the reason.</Typography>
+                        : <PipelineStepper status={selected.status} />}
+                    </Box>
 
-                        {/* Salary Info */}
-                        <Typography variant="overline" color="text.disabled" sx={{ letterSpacing: 1 }}>Salary Details</Typography>
-                        <Grid container spacing={2} sx={{ mb: 2 }}>
-                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Month</Typography><Typography variant="body2" fontWeight={600}>{meta.month || '—'}</Typography></Grid>
-                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Department</Typography><Typography variant="body2">{meta.department || '—'}</Typography></Grid>
-                          <Grid item xs={4}><Typography variant="caption" color="text.secondary">Base Salary</Typography><Typography variant="body2">₹{(meta.baseSalary || 0).toLocaleString()}</Typography></Grid>
-                          <Grid item xs={4}><Typography variant="caption" color="text.secondary">Deductions</Typography><Typography variant="body2">₹{(meta.deductions || 0).toLocaleString()}</Typography></Grid>
-                          <Grid item xs={4}><Typography variant="caption" color="text.secondary">Net Payable</Typography><Typography variant="body2" fontWeight={600}>₹{(meta.netAmount || 0).toLocaleString()}</Typography></Grid>
-                          <Grid item xs={12}><Typography variant="caption" color="text.secondary">Project Head / Approver</Typography><Typography variant="body2">{meta.projectHead || '—'}</Typography></Grid>
-                        </Grid>
-                        <Divider sx={{ my: 1.5, borderColor: 'rgba(255,255,255,0.06)' }} />
-                      </>
-                    ) : (
+                    {meta && (
                       <>
-                        {/* Partner Info */}
-                        <Typography variant="overline" color="text.disabled" sx={{ letterSpacing: 1 }}>Partner Information</Typography>
-                        <Grid container spacing={2} sx={{ mb: 2 }}>
-                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Name</Typography><Typography variant="body2" fontWeight={600}>{meta.vendorName || meta.partnerName || '—'}</Typography></Grid>
-                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Company</Typography><Typography variant="body2" fontWeight={600}>{meta.companyName || '—'}</Typography></Grid>
-                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Phone</Typography><Typography variant="body2">{meta.phone || '—'}</Typography></Grid>
-                          <Grid item xs={3}><Typography variant="caption" color="text.secondary">City</Typography><Typography variant="body2">{meta.city || '—'}</Typography></Grid>
-                          <Grid item xs={3}><Typography variant="caption" color="text.secondary">State</Typography><Typography variant="body2">{meta.state || '—'}</Typography></Grid>
-                        </Grid>
-                        <Divider sx={{ my: 1.5, borderColor: 'rgba(255,255,255,0.06)' }} />
+                        <Box>
+                          <SectionLabel>{isSalary ? 'Employee' : 'Partner'}</SectionLabel>
+                          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(3, 1fr)' }, gap: 2 }}>
+                            {isSalary ? (
+                              <>
+                                <KeyValue label="Name" value={meta.employeeName} strong />
+                                <KeyValue label="Employee ID" value={meta.employeeCode} mono />
+                                <KeyValue label="Phone" value={meta.phone} />
+                                <KeyValue label="City" value={meta.city} />
+                                <KeyValue label="State" value={meta.state} />
+                              </>
+                            ) : (
+                              <>
+                                <KeyValue label="Name" value={meta.vendorName || meta.partnerName} strong />
+                                <KeyValue label="Company" value={meta.companyName} />
+                                <KeyValue label="Phone" value={meta.phone} />
+                                <KeyValue label="City" value={meta.city} />
+                                <KeyValue label="State" value={meta.state} />
+                                {meta.isGst && <KeyValue label="GSTIN" value={meta.gstNumber} mono />}
+                              </>
+                            )}
+                          </Box>
+                        </Box>
 
-                        {/* Project Info */}
-                        <Typography variant="overline" color="text.disabled" sx={{ letterSpacing: 1 }}>Project Details</Typography>
-                        <Grid container spacing={2} sx={{ mb: 2 }}>
-                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Project</Typography><Typography variant="body2" fontWeight={600}>{meta.projectName || '—'}</Typography></Grid>
-                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Job Description</Typography><Typography variant="body2">{meta.jobDescription || meta.department || '—'}</Typography></Grid>
-                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Project Head</Typography><Typography variant="body2">{meta.projectHead || '—'}</Typography></Grid>
-                          <Grid item xs={3}><Typography variant="caption" color="text.secondary">Start</Typography><Typography variant="body2">{meta.startDate || '—'}</Typography></Grid>
-                          <Grid item xs={3}><Typography variant="caption" color="text.secondary">End</Typography><Typography variant="body2">{meta.endDate || '—'}</Typography></Grid>
-                        </Grid>
-                        <Divider sx={{ my: 1.5, borderColor: 'rgba(255,255,255,0.06)' }} />
-                      </>
-                    )}
+                        <Box>
+                          <SectionLabel>{isSalary ? 'Salary' : 'Project'}</SectionLabel>
+                          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(3, 1fr)' }, gap: 2 }}>
+                            {isSalary ? (
+                              <>
+                                <KeyValue label="Month" value={meta.month} strong />
+                                <KeyValue label="Department" value={meta.department} />
+                                <KeyValue label="Approver" value={meta.projectHead} />
+                              </>
+                            ) : (
+                              <>
+                                <KeyValue label="Project" value={meta.projectName} strong sx={{ gridColumn: { xs: '1 / -1', sm: 'span 3' } }} />
+                                <KeyValue label="Role" value={meta.jobDescription || meta.department} />
+                                <KeyValue label="Project head" value={meta.projectHead} />
+                                <KeyValue label="Dates" value={meta.startDate ? `${formatDate(meta.startDate)} – ${formatDate(meta.endDate)}` : null} />
+                              </>
+                            )}
+                          </Box>
+                        </Box>
 
-                    {/* Bank & Cheque Details */}
-                    {(meta.bankName || meta.chequeFileHash) && (
-                      <>
-                        <Typography variant="overline" color="text.disabled" sx={{ letterSpacing: 1 }}>Bank & Payment Information</Typography>
-                        <Grid container spacing={2} sx={{ mb: 2, mt: 0.5 }}>
-                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Beneficiary Name</Typography><Typography variant="body2" fontWeight={600}>{meta.beneficiaryName || '—'}</Typography></Grid>
-                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Bank Name</Typography><Typography variant="body2" fontWeight={600}>{meta.bankName || '—'}</Typography></Grid>
-                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Branch Name</Typography><Typography variant="body2">{meta.branchName || '—'}</Typography></Grid>
-                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">IFSC Code</Typography><Typography variant="body2" fontFamily="monospace" fontWeight={600}>{meta.ifscCode || '—'}</Typography></Grid>
-                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Account Number</Typography><Typography variant="body2" fontFamily="monospace">{meta.accountNumber || '—'}</Typography></Grid>
-                          <Grid item xs={6}><Typography variant="caption" color="text.secondary">Account Type</Typography><Typography variant="body2">{meta.accountType || '—'}</Typography></Grid>
-                          {meta.chequeFileHash && (
-                            <Grid item xs={12} sx={{ mt: 1 }}>
-                              <Typography variant="caption" color="success.main" sx={{ display: 'block', mb: 0.5, fontWeight: 700 }}>
-                                📸 Attached Cancelled Cheque
-                              </Typography>
+                        {(meta.bankName || meta.accountNumber) && (
+                          <Box>
+                            <SectionLabel>Bank account</SectionLabel>
+                            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(3, 1fr)' }, gap: 2 }}>
+                              <KeyValue label="Account holder" value={meta.beneficiaryName} strong />
+                              <KeyValue label="Bank" value={meta.bankName} />
+                              <KeyValue label="Branch" value={meta.branchName} />
+                              <KeyValue label="Account no." value={meta.accountNumber} mono />
+                              <KeyValue label="IFSC" value={meta.ifscCode} mono />
+                              <KeyValue label="Type" value={meta.accountType} />
+                            </Box>
+                            {meta.chequeFileHash && (
                               <AuthedFile name={meta.chequeFileHash}>
-                                {(chequeUrl) => meta.chequeFileHash.toLowerCase().endsWith('.pdf') ? (
-                                  <Box sx={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden' }}>
-                                    <iframe
-                                      src={chequeUrl}
-                                      title="Cancelled Cheque PDF"
-                                      width="100%"
-                                      height="250px"
-                                      style={{ border: 'none', backgroundColor: '#fff', borderRadius: 4 }}
-                                    />
-                                  </Box>
-                                ) : (
-                                  <Box
-                                    component="img"
-                                    src={chequeUrl}
-                                    alt="Cancelled Cheque"
-                                    sx={{ maxWidth: '100%', maxHeight: 200, objectFit: 'contain', borderRadius: 2, border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer' }}
-                                    onClick={() => setFullImage(chequeUrl)}
-                                  />
+                                {(chequeUrl) => (
+                                  <Button size="small" variant="outlined" sx={{ mt: 2 }} startIcon={<Receipt />}
+                                    {...(meta.chequeFileHash.toLowerCase().endsWith('.pdf')
+                                      ? { href: chequeUrl, target: '_blank', rel: 'noopener noreferrer' }
+                                      : { onClick: () => setFullImage(chequeUrl) })}>
+                                    View cancelled cheque
+                                  </Button>
                                 )}
                               </AuthedFile>
-                            </Grid>
-                          )}
-                        </Grid>
-                        <Divider sx={{ my: 1.5, borderColor: 'rgba(255,255,255,0.06)' }} />
+                            )}
+                          </Box>
+                        )}
+
+                        <Box>
+                          <SectionLabel>Breakdown</SectionLabel>
+                          <Box sx={{ display: 'grid', gap: 0.75, p: 2, borderRadius: `${tokens.radius.md}px`, border: `1px solid ${tokens.border}` }}>
+                            {[
+                              [isSalary ? 'Base salary' : 'Base amount', isSalary ? (meta.baseSalary || 0) : (meta.baseAmount || 0)],
+                              ...(isSalary && meta.deductions > 0 ? [['Deductions', -meta.deductions]] : []),
+                              ...(meta.advanceAmount > 0 ? [['Advance received', meta.advanceAmount]] : []),
+                              ...(meta.isGst ? [[`GST · ${meta.gstType || '18%'}`, meta.gstAmount || 0]] : []),
+                            ].map(([k, v]) => (
+                              <Box key={k} sx={{ display: 'flex', justifyContent: 'space-between', gap: 2 }}>
+                                <Typography variant="body2" sx={{ color: 'text.secondary' }}>{k}</Typography>
+                                <Typography variant="body2" sx={{ fontFeatureSettings: '"tnum"' }}>{formatINR(v)}</Typography>
+                              </Box>
+                            ))}
+                            <Divider sx={{ my: 0.5 }} />
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                              <Typography variant="body2" sx={{ fontWeight: 600 }}>Total</Typography>
+                              <Typography variant="body2" sx={{ fontWeight: 650, fontFeatureSettings: '"tnum"' }}>{formatINR(meta.totalAmount || meta.netAmount || selected.amount)}</Typography>
+                            </Box>
+                          </Box>
+                        </Box>
                       </>
                     )}
 
-                    {/* Financial Breakdown */}
-                    <Typography variant="overline" color="text.disabled" sx={{ letterSpacing: 1 }}>Financial Summary</Typography>
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.8, mt: 1 }}>
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <Typography variant="body2" color="text.secondary">{meta.type === 'salary' ? 'Base Salary' : 'Base Amount'}</Typography>
-                        <Typography variant="body2" fontWeight={600}>₹{(meta.type === 'salary' ? (meta.baseSalary || 0) : (meta.baseAmount || 0)).toLocaleString()}</Typography>
+                    {!meta && (
+                      <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2 }}>
+                        <KeyValue label="Requester" value={selected.requester} mono />
+                        <KeyValue label="Project head" value={getVerifierInfo(selected)?.name} />
                       </Box>
-                      {meta.type === 'salary' && meta.deductions > 0 && (
-                        <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                          <Typography variant="body2" color="text.secondary">Deductions</Typography>
-                          <Typography variant="body2">-₹{meta.deductions.toLocaleString()}</Typography>
-                        </Box>
-                      )}
-                      {meta.advanceAmount > 0 && (
-                        <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                          <Typography variant="body2" color="text.secondary">Advance Amount</Typography>
-                          <Typography variant="body2">₹{meta.advanceAmount.toLocaleString()}</Typography>
-                        </Box>
-                      )}
-                      {meta.isGst && (
-                        <>
-                          <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                            <Typography variant="body2" color="text.secondary">GST ({meta.gstType})</Typography>
-                            <Typography variant="body2">₹{(meta.gstAmount || 0).toLocaleString()}</Typography>
-                          </Box>
-                          <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                            <Typography variant="body2" color="text.secondary">GST Number</Typography>
-                            <Typography variant="body2" fontFamily="monospace">{meta.gstNumber || '—'}</Typography>
-                          </Box>
-                        </>
-                      )}
-                      <Divider sx={{ borderColor: 'rgba(255,255,255,0.08)' }} />
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <Typography variant="body1" fontWeight={700} color="primary.light">Total Amount</Typography>
-                        <Typography variant="body1" fontWeight={700} color="primary.light">₹{(meta.totalAmount || selected.amount || 0).toLocaleString()}</Typography>
-                      </Box>
-                    </Box>
-                  </Paper>
-                )}
-
-                {/* Quick details if no metadata */}
-                {!meta && (
-                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mb: 3 }}>
-                    {[
-                      { label: 'Amount', value: `₹${selected.amount?.toLocaleString()}`, icon: <CurrencyRupee sx={{ fontSize: 16 }} />, color: 'success.light' },
-                      { label: 'Purpose', value: selected.purpose },
-                      { label: 'Requester', value: selected.requester, icon: <Person sx={{ fontSize: 16 }} /> },
-                      { label: 'Submitted', value: new Date(selected.ts).toLocaleString('en-IN') },
-                    ].map(({ label, value, icon, color }) => (
-                      <Box key={label} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                        <Typography variant="caption" color="text.secondary">{label}</Typography>
-                        <Typography variant="body2" fontWeight={600} color={color || 'text.primary'} sx={{ display: 'flex', alignItems: 'center', gap: 0.3, textAlign: 'right', maxWidth: 280 }}>
-                          {icon}{value}
-                        </Typography>
-                      </Box>
-                    ))}
+                    )}
                   </Box>
-                )}
 
-                {/* Verifier Info */}
-                {vInfo && (
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                    <Typography variant="caption" color="text.secondary">Assigned To</Typography>
-                    <Chip
-                      icon={<VerifiedUser sx={{ fontSize: 14 }} />}
-                      label={`${vInfo.name} — ${vInfo.title}`}
-                      size="small"
-                      sx={{ bgcolor: `${vInfo.color}22`, color: vInfo.color, border: `1px solid ${vInfo.color}55` }}
-                    />
-                  </Box>
-                )}
-
-                {/* ── ATTACHED DOCUMENT ── */}
-                {selected.file_hash && (() => {
-                  const isPdf = selected.file_hash.toLowerCase().endsWith('.pdf');
-                  return (
-                    <Paper sx={{ p: 2, mb: 3, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(0,0,0,0.3)' }}>
-                      <Typography variant="overline" color="text.disabled" sx={{ letterSpacing: 1, mb: 1, display: 'block' }}>
-                        📄 {meta?.type === 'salary' ? 'Attached Payslip / Proof Document' : 'Original Partner Invoice'}
-                      </Typography>
-                      <AuthedFile name={selected.file_hash}>
-                        {(fileUrl) => isPdf ? (
-                          <Box sx={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden' }}>
-                            <iframe
-                              src={fileUrl}
-                              title="Invoice PDF"
-                              width="100%"
-                              height="400px"
-                              style={{ border: 'none', backgroundColor: '#fff' }}
-                            />
-                            <Box sx={{ p: 1, textAlign: 'center', borderTop: '1px solid rgba(255,255,255,0.1)', bgcolor: 'rgba(0,0,0,0.2)' }}>
-                              <Button
-                                variant="outlined"
-                                size="small"
-                                component="a"
-                                href={fileUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                              >
-                                📂 Open PDF in New Tab
+                  {/* Right — document, activity, decision */}
+                  <Box sx={{ p: 3, display: 'grid', gap: 3, alignContent: 'start', bgcolor: 'rgba(255,255,255,0.012)' }}>
+                    {selected.file_hash && (
+                      <Box>
+                        <SectionLabel>{isSalary ? 'Payslip / proof' : 'Invoice document'}</SectionLabel>
+                        <AuthedFile name={selected.file_hash}>
+                          {(fileUrl) => isPdf ? (
+                            <Box sx={{ border: `1px solid ${tokens.border}`, borderRadius: `${tokens.radius.md}px`, overflow: 'hidden' }}>
+                              <iframe src={fileUrl} title="Invoice PDF" width="100%" height="320px" style={{ border: 'none', backgroundColor: '#fff', display: 'block' }} />
+                              <Button fullWidth size="small" component="a" href={fileUrl} target="_blank" rel="noopener noreferrer" endIcon={<OpenInNewRounded />} sx={{ borderRadius: 0, borderTop: `1px solid ${tokens.border}` }}>
+                                Open in new tab
                               </Button>
                             </Box>
-                          </Box>
-                        ) : (
-                          <>
+                          ) : (
                             <Box
-                              component="img"
-                              src={fileUrl}
-                              alt="Attached document"
-                              sx={{ width: '100%', maxHeight: 400, objectFit: 'contain', borderRadius: 2, border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer' }}
-                              onClick={() => setFullImage(fileUrl)}
-                            />
-                            <Typography variant="caption" color="primary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 1, cursor: 'pointer' }} onClick={() => setFullImage(fileUrl)}>
-                              <Visibility fontSize="inherit" /> Click to view full size
-                            </Typography>
-                          </>
-                        )}
-                      </AuthedFile>
-                    </Paper>
-                  );
-                })()}
-                
-                {/* Previous Comments Section */}
-                {comments.length > 0 && (
-                  <Box sx={{ mb: 3 }}>
-                    <Typography variant="subtitle2" color="primary" mb={1.5} sx={{ fontWeight: 700 }}>
-                      💬 Previous Comments & Reviews
-                    </Typography>
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-                      {comments.map((log) => {
-                        const dateStr = new Date(log.ts).toLocaleString('en-IN', {
-                          day: 'numeric', month: 'short', year: 'numeric',
-                          hour: '2-digit', minute: '2-digit'
-                        });
-                        const roleLabel = {
-                          DEV: '👨‍💻 Developer',
-                          EMP: '👤 Employee',
-                          VRF: '👁️ Verifier',
-                          FIN: '💼 Finance',
-                          OWN: '👑 Owner',
-                          ADM: '🛡️ Admin',
-                          VND: '🤝 Partner',
-                        }[log.actor_role] || log.actor_role || 'System';
+                              component="button" type="button" onClick={() => setFullImage(fileUrl)}
+                              sx={{ p: 0, border: `1px solid ${tokens.border}`, borderRadius: `${tokens.radius.md}px`, overflow: 'hidden', cursor: 'zoom-in', bgcolor: '#000', width: '100%', display: 'block', '&:focus-visible': { outline: 'none', boxShadow: tokens.focusRing } }}
+                              aria-label="View document full size"
+                            >
+                              <Box component="img" src={fileUrl} alt="Attached document" sx={{ width: '100%', maxHeight: 320, objectFit: 'contain', display: 'block' }} />
+                            </Box>
+                          )}
+                        </AuthedFile>
+                      </Box>
+                    )}
 
-                        return (
-                          <Paper 
-                            key={log.id} 
-                            sx={{ 
-                              p: 2, 
-                              borderRadius: 2, 
-                              border: '1px solid rgba(255,255,255,0.06)', 
-                              background: 'rgba(255,255,255,0.02)',
-                              position: 'relative'
-                            }}
-                          >
-                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                <Typography variant="body2" fontWeight={700}>
-                                  {log.actor_name || log.actor}
-                                </Typography>
-                                <Chip label={roleLabel} size="small" sx={{ fontSize: 9, height: 16 }} />
-                              </Box>
-                              <Typography variant="caption" color="text.secondary">
-                                {dateStr}
-                              </Typography>
-                            </Box>
-                            <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic', pl: 1, borderLeft: '2px solid rgba(99,102,241,0.4)' }}>
-                              "{log.comment || 'No comment provided'}"
-                            </Typography>
-                            <Box sx={{ mt: 1, display: 'flex', gap: 1 }}>
-                              <Chip label={`${log.prev || '-'} → ${log.next || '-'}`} size="small" variant="outlined" color="primary" sx={{ fontSize: 8, height: 14 }} />
-                            </Box>
-                          </Paper>
-                        );
-                      })}
+                    <Box>
+                      <SectionLabel>Activity</SectionLabel>
+                      {commentsLoading ? <Skeleton height={60} /> : comments.length ? <ActivityList logs={comments} /> : <Typography variant="body2" sx={{ color: 'text.disabled' }}>No activity yet.</Typography>}
+                    </Box>
+
+                    <Box>
+                      <SectionLabel>Your decision</SectionLabel>
+                      {hint && <Alert severity={hint.tone} sx={{ mb: 2 }}>{hint.text}</Alert>}
+                      {actionable.length > 0 && (
+                        <TextField
+                          label="Comment" required multiline minRows={2} fullWidth
+                          value={comment} onChange={(e) => setComment(e.target.value)}
+                          placeholder="Why you're approving, rejecting or paying — this is logged."
+                          inputProps={{ maxLength: 500 }}
+                        />
+                      )}
+                      {actionResult && <Alert severity={actionResult.type} sx={{ mt: 2 }}>{actionResult.msg}</Alert>}
                     </Box>
                   </Box>
-                )}
-                {commentsLoading && (
-                  <Box sx={{ py: 2, textAlign: 'center', mb: 2 }}>
-                    <CircularProgress size={20} />
-                  </Box>
-                )}
-
-                <Divider sx={{ mb: 2, borderColor: 'rgba(255,255,255,0.08)' }} />
-
-                {/* Comment Field */}
-                <TextField
-                  label="Review Comment *" multiline rows={2} fullWidth
-                  value={comment} onChange={(e) => setComment(e.target.value)}
-                  placeholder="Add your review notes, approval reason, or rejection reason..."
-                  sx={{ mb: 2 }}
-                />
-
-                {actionResult && (
-                  <Alert severity={actionResult.type} sx={{ mb: 1 }}>{actionResult.msg}</Alert>
-                )}
-
-                {/* Contextual guidance per role & status */}
-                {selected.status === 'PND' && isOwner && (
-                  <Alert severity="info" sx={{ fontSize: 12 }} icon={<Gavel />}>
-                    <strong>Owner Authorization (Debojit):</strong> Review this newly submitted request and either authorize it (send to Finance) or reject it.
-                  </Alert>
-                )}
-                {selected.status === 'VRF' && isOwner && (
-                  <Alert severity="info" sx={{ fontSize: 12 }} icon={<Gavel />}>
-                    <strong>Owner Authorization (Debojit):</strong> This is a legacy request from before the 1st-line verify stage was removed. Authorize payment or reject.
-                  </Alert>
-                )}
-                {selected.status === 'OWN' && isFin && (
-                  <Alert severity="info" sx={{ fontSize: 12 }} icon={<AccountBalance />}>
-                    <strong>Finance Review (Yash):</strong> Owner has authorized. Review financials and prepare for disbursement.
-                  </Alert>
-                )}
-                {selected.status === 'FIN' && isStrictFin && (
-                  <Alert severity="success" sx={{ fontSize: 12 }}>
-                    <strong>Ready for Disbursement:</strong> All approvals are complete. You can now disburse the payment.
-                  </Alert>
-                )}
-                {selected.status === 'DSB' && (
-                  <Alert severity="success">✅ This request has been fully disbursed.</Alert>
-                )}
-                {selected.status === 'REJ' && (
-                  <Alert severity="error">❌ This request was rejected.</Alert>
-                )}
+                </Box>
               </DialogContent>
-              <DialogActions sx={{ p: 2.5, gap: 1 }}>
-                <Button onClick={() => setSelected(null)} color="inherit">Close</Button>
 
-                {/* STAGE 1: PND → OWN (1st-line verify stage removed — Owner authorizes directly) */}
-                {selected.status === 'PND' && isOwner && (
-                  <>
-                    <Button startIcon={<Cancel />} color="error" variant="outlined" onClick={() => doAction('REJ')} disabled={actionLoading}>Reject</Button>
-                    <Button startIcon={<Gavel />} variant="contained" color="secondary" onClick={() => doAction('OWN')} disabled={actionLoading}>
-                      {actionLoading ? <CircularProgress size={18} color="inherit" /> : '👑 Authorize Payment'}
-                    </Button>
-                  </>
-                )}
-
-                {/* STAGE 1 (legacy): VRF → OWN, for any request submitted before this stage was removed */}
-                {selected.status === 'VRF' && isOwner && (
-                  <>
-                    <Button startIcon={<Cancel />} color="error" variant="outlined" onClick={() => doAction('REJ')} disabled={actionLoading}>Reject</Button>
-                    <Button startIcon={<Gavel />} variant="contained" color="secondary" onClick={() => doAction('OWN')} disabled={actionLoading}>
-                      {actionLoading ? <CircularProgress size={18} color="inherit" /> : '👑 Authorize Payment (legacy)'}
-                    </Button>
-                  </>
-                )}
-
-                {/* STAGE 3: OWN → FIN */}
-                {selected.status === 'OWN' && isFin && (
-                  <>
-                    <Button startIcon={<Cancel />} color="error" variant="outlined" onClick={() => doAction('REJ')} disabled={actionLoading}>Reject</Button>
-                    <Button startIcon={<Send />} variant="contained" color="primary" onClick={() => doAction('FIN')} disabled={actionLoading}>
-                      {actionLoading ? <CircularProgress size={18} color="inherit" /> : '💼 Finance Review'}
-                    </Button>
-                  </>
-                )}
-
-                {/* STAGE 4: FIN → DSB */}
-                {selected.status === 'FIN' && isStrictFin && (
-                  <Button startIcon={<CheckCircle />} variant="contained" color="success" onClick={() => doAction('DSB')} disabled={actionLoading}>
-                    {actionLoading ? <CircularProgress size={18} color="inherit" /> : '💰 Disburse Payment'}
+              <DialogActions>
+                <Button color="inherit" onClick={() => setSelected(null)} sx={{ color: 'text.secondary', mr: 'auto' }}>Close</Button>
+                {actionable.map(a => (
+                  <Button key={a.state} variant={a.variant} color={a.color} startIcon={actionLoading ? null : a.icon} onClick={() => doAction(a.state)} disabled={actionLoading}>
+                    {actionLoading && a.variant === 'contained' ? <CircularProgress size={18} color="inherit" /> : a.label}
                   </Button>
-                )}
+                ))}
               </DialogActions>
             </>
           );
         })()}
       </Dialog>
 
-      {/* Full Screen Image Modal */}
-      <Dialog open={!!fullImage} onClose={() => setFullImage(null)} maxWidth="lg" fullWidth PaperProps={{ sx: { background: '#111827', borderRadius: 3 } }}>
-        <DialogTitle sx={{ m: 0, p: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Typography fontWeight={700}>Invoice Preview</Typography>
-          <Button startIcon={<Cancel />} onClick={() => setFullImage(null)} color="error">Close Preview</Button>
+      {/* Full-size document preview */}
+      <Dialog open={!!fullImage} onClose={() => setFullImage(null)} maxWidth="lg" fullWidth>
+        <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          Document preview
+          <IconButton onClick={() => setFullImage(null)} aria-label="Close preview"><CloseRounded /></IconButton>
         </DialogTitle>
-        <DialogContent sx={{ p: 2, textAlign: 'center', backgroundColor: '#000', borderRadius: 2 }}>
-          <Box component="img" src={fullImage} alt="Full Invoice" sx={{ maxWidth: '100%', maxHeight: '80vh', objectFit: 'contain' }} />
+        <DialogContent sx={{ textAlign: 'center', bgcolor: '#000', p: 2 }}>
+          <Box component="img" src={fullImage} alt="Full-size document" sx={{ maxWidth: '100%', maxHeight: '80vh', objectFit: 'contain' }} />
         </DialogContent>
+      </Dialog>
+
+      {/* Confirm completing a project */}
+      <Dialog open={!!confirmComplete} onClose={() => setConfirmComplete(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Mark project complete?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+            <Box component="span" sx={{ color: 'text.primary', fontWeight: 600 }}>{confirmComplete?.name}</Box> will be removed from the active list, and partners won't be able to submit invoices for it.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button color="inherit" onClick={() => setConfirmComplete(null)}>Cancel</Button>
+          <Button variant="contained" color="success" onClick={() => { handleCompleteProject(confirmComplete.id); setConfirmComplete(null); }}>Mark complete</Button>
+        </DialogActions>
       </Dialog>
     </Box>
   );

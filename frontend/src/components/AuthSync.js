@@ -75,9 +75,9 @@ export default function AuthSync({ children }) {
 
   if (!synced) {
     return (
-      <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', justifyContent: 'center', alignItems: 'center', bgcolor: '#0b0f19', color: 'white' }}>
-        <CircularProgress color="primary" sx={{ mb: 2 }} />
-        <Typography>Authenticating and syncing profile...</Typography>
+      <Box role="status" sx={{ display: 'flex', flexDirection: 'column', height: '100vh', justifyContent: 'center', alignItems: 'center', gap: 2, bgcolor: 'background.default' }}>
+        <CircularProgress size={28} thickness={4.5} />
+        <Typography variant="body2" sx={{ color: 'text.secondary' }}>Signing you in…</Typography>
       </Box>
     );
   }

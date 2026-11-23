@@ -1,13 +1,28 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-  Box, Typography, Paper, Table, TableHead, TableRow, TableCell, TableBody,
-  Chip, Button, TextField, CircularProgress, Avatar, Tooltip, Select,
-  MenuItem, InputLabel, FormControl, Divider
+  Box, Typography, Paper, Table, TableHead, TableRow, TableCell, TableBody, TableContainer,
+  Button, TextField, Avatar, Tooltip, Select, MenuItem, InputLabel, FormControl, Skeleton, IconButton, Collapse,
 } from '@mui/material';
-import { Assignment, Download, FilterList, Person, BarChart } from '@mui/icons-material';
+import {
+  AssignmentRounded, DownloadRounded, GroupsRounded, ScheduleRounded, BoltRounded, BlockRounded,
+  KeyboardArrowDownRounded, CheckCircleOutlineRounded, AutorenewRounded, EventRounded,
+} from '@mui/icons-material';
 import { useSelector } from 'react-redux';
 import { useApi } from '../hooks/useApi';
 import jsPDF from 'jspdf';
+import { PageHeader, StatCard, ToneChip, EmptyState, avatarColor } from '../components/ui';
+import { tokens, tones } from '../theme';
+import { formatDate } from '../utils/format';
+import { MOODS } from './WorksheetForm';
+
+const empShort = (id = '') => String(id).split('_').pop().slice(0, 8);
+
+const DETAIL_FIELDS = [
+  { key: 'tasks_completed', label: 'Done', Icon: CheckCircleOutlineRounded, tone: 'success' },
+  { key: 'tasks_in_progress', label: 'In progress', Icon: AutorenewRounded },
+  { key: 'blockers', label: 'Blocked', Icon: BlockRounded, tone: 'danger' },
+  { key: 'tomorrow_plan', label: 'Tomorrow', Icon: EventRounded },
+];
 
 const WorksheetAdmin = () => {
   const { user } = useSelector((state) => state.auth);
@@ -19,236 +34,223 @@ const WorksheetAdmin = () => {
   const [filterDate, setFilterDate] = useState('');
   const [expanded, setExpanded] = useState(null);
 
-  const fetchAll = async () => {
-    setLoading(true);
+  const fetchAll = useCallback(async () => {
     try {
       const res = await apiFetch('/api/worksheets?all=1');
       if (res.ok) setSheets(await res.json());
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
-  };
+  }, [apiFetch]);
 
-  useEffect(() => { fetchAll(); }, []); // eslint-disable-line
+  useEffect(() => { fetchAll(); }, [fetchAll]);
 
-  const employees = [...new Set(sheets.map(s => s.employee_id))];
+  const employees = useMemo(() => [...new Set(sheets.map((s) => s.employee_id))], [sheets]);
 
-  const filtered = sheets.filter(s => {
+  const filtered = sheets.filter((s) => {
     if (filterEmployee !== 'all' && s.employee_id !== filterEmployee) return false;
-    if (filterDate && !s.date.startsWith(filterDate)) return false;
+    if (filterDate && !String(s.date).startsWith(filterDate)) return false;
     return true;
   });
 
-  // ── PDF Export ──────────────────────────────────────────────────────────────
+  const stats = useMemo(() => {
+    const n = filtered.length;
+    const avg = (k) => (n ? filtered.reduce((a, s) => a + (Number(s[k]) || 0), 0) / n : 0);
+    return {
+      n,
+      people: new Set(filtered.map((s) => s.employee_id)).size,
+      hours: n ? `${avg('hours_worked').toFixed(1)}h` : '—',
+      productivity: n ? `${avg('productivity').toFixed(1)}/5` : '—',
+      blocked: filtered.filter((s) => s.blockers?.trim()).length,
+    };
+  }, [filtered]);
+
+  // ── PDF export: printable white layout, plain-text labels (jsPDF core fonts have no emoji) ──
   const exportPDF = () => {
-    const doc = new jsPDF();
-    const now = new Date().toLocaleString('en-IN');
+    const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+    const W = 210; const M = 16; const CW = W - M * 2;
+    const ink = [17, 24, 39]; const muted = [107, 114, 128]; const accent = [79, 70, 229]; const danger = [185, 28, 28];
+    let y = 22;
 
-    doc.setFillColor(17, 24, 39);
-    doc.rect(0, 0, 210, 297, 'F');
+    const header = () => {
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(16); doc.setTextColor(...ink);
+      doc.text('Daily work report', M, y);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(...muted);
+      const scope = [
+        filterEmployee !== 'all' ? `Employee ${empShort(filterEmployee)}` : 'All employees',
+        filterDate ? new Date(`${filterDate}-01T00:00:00`).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }) : 'All dates',
+      ].join(' · ');
+      doc.text(`AI Collective · ${scope} · ${filtered.length} updates · exported ${new Date().toLocaleString('en-IN')} by ${user?.name || user?.role || ''}`, M, y + 6);
+      doc.setDrawColor(229, 231, 235); doc.setLineWidth(0.3); doc.line(M, y + 10, W - M, y + 10);
+      y += 18;
+    };
+    header();
 
-    doc.setFontSize(18);
-    doc.setTextColor(99, 102, 241);
-    doc.text('AI Finance - Daily Work Progress Report', 14, 20);
+    filtered.forEach((s) => {
+      const blocks = DETAIL_FIELDS
+        .filter((f) => s[f.key]?.trim())
+        .map((f) => ({ ...f, lines: doc.splitTextToSize(String(s[f.key]).trim(), CW - 26) }));
+      const height = 9 + blocks.reduce((h, b) => h + b.lines.length * 4.4 + 2, 0) + 4;
+      if (y + height > 282) { doc.addPage(); y = 22; header(); }
 
-    doc.setFontSize(10);
-    doc.setTextColor(150, 150, 180);
-    doc.text(`Generated: ${now}  |  Total Records: ${filtered.length}  |  By: ${user?.name || user?.role}`, 14, 28);
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(...ink);
+      doc.text(formatDate(s.date), M, y);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(...muted);
+      const mood = MOODS.find((m) => m.value === Number(s.mood));
+      doc.text(`Employee ${empShort(s.employee_id)}  ·  ${s.hours_worked}h  ·  productivity ${s.productivity}/5${mood ? `  ·  mood ${mood.label.toLowerCase()}` : ''}`, M + 34, y);
+      y += 6.5;
 
-    doc.setDrawColor(99, 102, 241);
-    doc.setLineWidth(0.5);
-    doc.line(14, 32, 196, 32);
+      blocks.forEach((b) => {
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5);
+        doc.setTextColor(...(b.tone === 'danger' ? danger : b.tone === 'success' ? accent : muted));
+        doc.text(b.label.toUpperCase(), M, y);
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); doc.setTextColor(...ink);
+        doc.text(b.lines, M + 26, y);
+        y += b.lines.length * 4.4 + 2;
+      });
 
-    let y = 40;
-    filtered.forEach((s, i) => {
-      if (y > 250) { doc.addPage(); doc.setFillColor(17, 24, 39); doc.rect(0, 0, 210, 297, 'F'); y = 20; }
-
-      doc.setFillColor(30, 40, 60);
-      doc.roundedRect(12, y - 4, 186, 46, 2, 2, 'F');
-
-      doc.setFontSize(11);
-      doc.setTextColor(165, 180, 252);
-      doc.text(`${i + 1}. ${s.date}  |  Emp: ${s.employee_id.split('_').pop().slice(0, 12)}  |  ${s.hours_worked}h  |  ⚡${s.productivity}/5`, 16, y + 4);
-
-      doc.setFontSize(9);
-      doc.setTextColor(200, 200, 220);
-      const tasksLines = doc.splitTextToSize(`✅ Completed: ${s.tasks_completed}`, 170);
-      doc.text(tasksLines, 16, y + 11);
-      y += 5 * tasksLines.length;
-
-      if (s.tasks_in_progress) {
-        const wipLines = doc.splitTextToSize(`🔄 In Progress: ${s.tasks_in_progress}`, 170);
-        doc.text(wipLines, 16, y + 12);
-        y += 5 * wipLines.length;
-      }
-
-      if (s.blockers) {
-        doc.setTextColor(239, 68, 68);
-        const blockLines = doc.splitTextToSize(`🚧 Blockers: ${s.blockers}`, 170);
-        doc.text(blockLines, 16, y + 12);
-        y += 5 * blockLines.length;
-        doc.setTextColor(200, 200, 220);
-      }
-
-      if (s.tomorrow_plan) {
-        const planLines = doc.splitTextToSize(`📅 Tomorrow: ${s.tomorrow_plan}`, 170);
-        doc.text(planLines, 16, y + 12);
-        y += 5 * planLines.length;
-      }
-
-      y += 20;
+      y += 2;
+      doc.setDrawColor(243, 244, 246); doc.line(M, y, W - M, y);
+      y += 7;
     });
 
-    const filename = `work_report_${new Date().toISOString().split('T')[0]}${filterEmployee !== 'all' ? `_${filterEmployee.split('_').pop().slice(0, 8)}` : ''}.pdf`;
+    const filename = `work_report_${new Date().toISOString().split('T')[0]}${filterEmployee !== 'all' ? `_${empShort(filterEmployee)}` : ''}.pdf`;
     doc.save(filename);
   };
 
+  const filtersActive = filterEmployee !== 'all' || filterDate;
+
   return (
-    <Box>
-      {/* Header */}
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 4, flexWrap: 'wrap', gap: 2 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-          <BarChart sx={{ color: '#6366f1', fontSize: 30 }} />
-          <Box>
-            <Typography variant="h4" fontWeight={700}>Work Progress Reports</Typography>
-            <Typography variant="body2" color="text.secondary">All employee daily worksheets — view & export as PDF</Typography>
-          </Box>
+    <Box sx={{ pb: 4 }}>
+      <PageHeader
+        title="Work reports"
+        subtitle="Everyone's daily updates in one place. Filter by person or month and export a printable PDF."
+        actions={
+          <Button variant="contained" startIcon={<DownloadRounded />} onClick={exportPDF} disabled={filtered.length === 0}>
+            Export PDF
+          </Button>
+        }
+      />
+
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(4, 1fr)' }, gap: 2, mb: 3 }}>
+        <StatCard label="Updates" value={stats.n} icon={<AssignmentRounded />} tone="accent" loading={loading} hint={`from ${stats.people} ${stats.people === 1 ? 'person' : 'people'}`} />
+        <StatCard label="Avg hours / day" value={stats.hours} icon={<ScheduleRounded />} tone="info" loading={loading} />
+        <StatCard label="Avg productivity" value={stats.productivity} icon={<BoltRounded />} tone="violet" loading={loading} />
+        <StatCard label="Blockers" value={stats.blocked} icon={<BlockRounded />} tone={stats.blocked ? 'danger' : 'success'} loading={loading} hint={stats.blocked ? 'Worth a follow-up' : 'Nothing blocked'} />
+      </Box>
+
+      <Paper sx={{ overflow: 'hidden' }}>
+        <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center', p: 2, borderBottom: `1px solid ${tokens.border}` }}>
+          <FormControl size="small" sx={{ minWidth: 200 }}>
+            <InputLabel>Employee</InputLabel>
+            <Select value={filterEmployee} onChange={(e) => setFilterEmployee(e.target.value)} label="Employee" startAdornment={<GroupsRounded sx={{ fontSize: 18, color: 'text.disabled', mr: 1 }} />}>
+              <MenuItem value="all">Everyone</MenuItem>
+              {employees.map((id) => <MenuItem key={id} value={id}>Employee {empShort(id)}</MenuItem>)}
+            </Select>
+          </FormControl>
+          <TextField type="month" size="small" label="Month" value={filterDate} onChange={(e) => setFilterDate(e.target.value)} InputLabelProps={{ shrink: true }} sx={{ width: 180 }} />
+          {filtersActive && <Button size="small" color="inherit" onClick={() => { setFilterEmployee('all'); setFilterDate(''); }} sx={{ color: 'text.secondary' }}>Clear</Button>}
+          <Typography variant="caption" sx={{ color: 'text.disabled', ml: 'auto' }}>
+            {filtered.length} of {sheets.length} updates
+          </Typography>
         </Box>
-        <Button
-          variant="contained" startIcon={<Download />} onClick={exportPDF}
-          disabled={filtered.length === 0}
-          sx={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', borderRadius: 2, px: 3 }}
-        >
-          Export PDF ({filtered.length} records)
-        </Button>
-      </Box>
 
-      {/* Stats */}
-      <Box sx={{ display: 'flex', gap: 2, mb: 3, flexWrap: 'wrap' }}>
-        {[
-          { label: 'Total Reports', value: sheets.length, color: '#6366f1' },
-          { label: 'Employees', value: employees.length, color: '#8b5cf6' },
-          { label: 'Avg Hours/Day', value: sheets.length ? (sheets.reduce((a, s) => a + (s.hours_worked || 0), 0) / sheets.length).toFixed(1) + 'h' : '—', color: '#3b82f6' },
-          { label: 'Avg Productivity', value: sheets.length ? (sheets.reduce((a, s) => a + (s.productivity || 0), 0) / sheets.length).toFixed(1) + '/5' : '—', color: '#22c55e' },
-          { label: 'With Blockers', value: sheets.filter(s => s.blockers?.trim()).length, color: '#ef4444' },
-        ].map(s => (
-          <Paper key={s.label} sx={{ p: 2, flex: '1 0 120px', borderRadius: 2, border: `1px solid ${s.color}33`, textAlign: 'center' }}>
-            <Typography variant="h5" fontWeight={700} sx={{ color: s.color }}>{s.value}</Typography>
-            <Typography variant="caption" color="text.secondary">{s.label}</Typography>
-          </Paper>
-        ))}
-      </Box>
+        {loading && <Box sx={{ p: 2, display: 'grid', gap: 1 }}>{[0, 1, 2, 3].map((i) => <Skeleton key={i} height={44} />)}</Box>}
 
-      {/* Filters */}
-      <Paper sx={{ p: 2, mb: 3, borderRadius: 2, display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center', background: 'rgba(255,255,255,0.02)' }}>
-        <FilterList color="primary" />
-        <FormControl size="small" sx={{ minWidth: 180 }}>
-          <InputLabel>Filter by Employee</InputLabel>
-          <Select value={filterEmployee} onChange={(e) => setFilterEmployee(e.target.value)} label="Filter by Employee">
-            <MenuItem value="all">All Employees</MenuItem>
-            {employees.map(id => (
-              <MenuItem key={id} value={id}>Emp #{id.split('_').pop().slice(0, 10)}</MenuItem>
-            ))}
-          </Select>
-        </FormControl>
-        <TextField
-          type="month" size="small" label="Filter Month"
-          value={filterDate} onChange={(e) => setFilterDate(e.target.value)}
-          InputLabelProps={{ shrink: true }} sx={{ width: 160 }}
-        />
-        {(filterEmployee !== 'all' || filterDate) && (
-          <Button size="small" onClick={() => { setFilterEmployee('all'); setFilterDate(''); }}>Clear Filters</Button>
+        {!loading && filtered.length === 0 && (
+          <EmptyState
+            icon={<AssignmentRounded />}
+            title={sheets.length ? 'Nothing matches' : 'No updates yet'}
+            description={sheets.length ? 'Try another person or month.' : 'Daily worksheets from the team will appear here.'}
+            action={filtersActive && <Button variant="outlined" onClick={() => { setFilterEmployee('all'); setFilterDate(''); }}>Clear filters</Button>}
+          />
         )}
-        <Typography variant="caption" color="text.secondary" sx={{ ml: 'auto' }}>
-          Showing {filtered.length} of {sheets.length} reports
-        </Typography>
-      </Paper>
 
-      {/* Table */}
-      {loading ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}><CircularProgress /></Box>
-      ) : filtered.length === 0 ? (
-        <Paper sx={{ p: 6, textAlign: 'center', borderRadius: 3, background: 'rgba(255,255,255,0.02)' }}>
-          <Assignment sx={{ fontSize: 56, color: 'text.disabled', mb: 2 }} />
-          <Typography color="text.secondary">No worksheets found</Typography>
-        </Paper>
-      ) : (
-        <Paper sx={{ borderRadius: 3, border: '1px solid rgba(255,255,255,0.06)', overflowX: 'auto' }}>
-          <Table>
-            <TableHead>
-              <TableRow sx={{ backgroundColor: 'rgba(99,102,241,0.1)' }}>
-                <TableCell>Employee</TableCell>
-                <TableCell>Date</TableCell>
-                <TableCell>Hours</TableCell>
-                <TableCell>Productivity</TableCell>
-                <TableCell>Tasks Completed</TableCell>
-                <TableCell>Blockers</TableCell>
-                <TableCell>Details</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {filtered.map((s) => (
-                <React.Fragment key={s.id}>
-                  <TableRow
-                    sx={{ cursor: 'pointer', '&:hover': { background: 'rgba(255,255,255,0.02)' } }}
-                    onClick={() => setExpanded(expanded === s.id ? null : s.id)}
-                  >
-                    <TableCell>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <Avatar sx={{ width: 28, height: 28, bgcolor: '#4f46e5', fontSize: 11 }}>
-                          {s.employee_id.split('_').pop().slice(0, 2).toUpperCase()}
-                        </Avatar>
-                        <Typography variant="caption">#{s.employee_id.split('_').pop().slice(0, 10)}</Typography>
-                      </Box>
-                    </TableCell>
-                    <TableCell><Typography variant="body2">{s.date}</Typography></TableCell>
-                    <TableCell><Chip label={`${s.hours_worked}h`} size="small" color="info" /></TableCell>
-                    <TableCell>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                        {'⭐'.repeat(Math.round(s.productivity || 0))}
-                        <Typography variant="caption" color="text.secondary"> {s.productivity}/5</Typography>
-                      </Box>
-                    </TableCell>
-                    <TableCell>
-                      <Tooltip title={s.tasks_completed}>
-                        <Typography variant="caption" noWrap sx={{ maxWidth: 200, display: 'block' }}>{s.tasks_completed}</Typography>
-                      </Tooltip>
-                    </TableCell>
-                    <TableCell>
-                      {s.blockers?.trim()
-                        ? <Chip label={s.blockers.slice(0, 30) + (s.blockers.length > 30 ? '…' : '')} color="error" size="small" />
-                        : <Chip label="None" color="success" size="small" />}
-                    </TableCell>
-                    <TableCell>
-                      <Button size="small" variant="text" onClick={(e) => { e.stopPropagation(); setExpanded(expanded === s.id ? null : s.id); }}>
-                        {expanded === s.id ? 'Hide' : 'View'}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                  {expanded === s.id && (
-                    <TableRow>
-                      <TableCell colSpan={7} sx={{ background: 'rgba(99,102,241,0.05)', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-                        <Box sx={{ p: 2, display: 'flex', gap: 3, flexWrap: 'wrap' }}>
-                          {[
-                            { label: '✅ Completed', value: s.tasks_completed },
-                            { label: '🔄 In Progress', value: s.tasks_in_progress },
-                            { label: '🚧 Blockers', value: s.blockers || 'None' },
-                            { label: '📅 Tomorrow Plan', value: s.tomorrow_plan || '—' },
-                          ].map(({ label, value }) => (
-                            <Box key={label} sx={{ flex: '1 0 200px' }}>
-                              <Typography variant="caption" color="text.disabled" fontWeight={600}>{label}</Typography>
-                              <Typography variant="body2" mt={0.5}>{value}</Typography>
+        {!loading && filtered.length > 0 && (
+          <TableContainer>
+            <Table sx={{ minWidth: 500 }} aria-label="Work reports">
+              <TableHead>
+                <TableRow>
+                  <TableCell padding="checkbox" />
+                  <TableCell>Employee</TableCell>
+                  <TableCell>Date</TableCell>
+                  <TableCell align="right">Hours</TableCell>
+                  <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>Productivity</TableCell>
+                  <TableCell sx={{ display: { xs: 'none', lg: 'table-cell' } }}>Done</TableCell>
+                  <TableCell>Blockers</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {filtered.map((s) => {
+                  const open = expanded === s.id;
+                  const mood = MOODS.find((m) => m.value === Number(s.mood));
+                  return (
+                    <React.Fragment key={s.id}>
+                      <TableRow hover onClick={() => setExpanded(open ? null : s.id)} sx={{ cursor: 'pointer', '& > td': { borderBottom: open ? 'none' : undefined } }}>
+                        <TableCell padding="checkbox">
+                          <IconButton size="small" aria-label={open ? 'Collapse' : 'Expand'} aria-expanded={open}>
+                            <KeyboardArrowDownRounded fontSize="small" sx={{ transition: 'transform .15s', transform: open ? 'rotate(180deg)' : 'none' }} />
+                          </IconButton>
+                        </TableCell>
+                        <TableCell>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <Avatar sx={{ width: 26, height: 26, fontSize: 11, bgcolor: avatarColor(s.employee_id), color: '#fff' }}>{empShort(s.employee_id).slice(0, 2).toUpperCase()}</Avatar>
+                            <Typography variant="body2" sx={{ fontWeight: 520 }}>{empShort(s.employee_id)}</Typography>
+                          </Box>
+                        </TableCell>
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                            {formatDate(s.date)}
+                            {mood && <Tooltip title={`Mood: ${mood.label}`}><mood.Icon sx={{ fontSize: 17, color: mood.color }} /></Tooltip>}
+                          </Box>
+                        </TableCell>
+                        <TableCell align="right" sx={{ fontFeatureSettings: '"tnum"' }}>{s.hours_worked}h</TableCell>
+                        <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>
+                          <Box sx={{ display: 'flex', gap: '2px' }} aria-label={`${s.productivity} of 5`}>
+                            {[1, 2, 3, 4, 5].map((i) => (
+                              <Box key={i} sx={{ width: 14, height: 6, borderRadius: 1, bgcolor: i <= Number(s.productivity) ? tokens.accentSoft : 'rgba(255,255,255,0.08)' }} />
+                            ))}
+                          </Box>
+                        </TableCell>
+                        <TableCell sx={{ maxWidth: 260, display: { xs: 'none', lg: 'table-cell' } }}>
+                          <Typography variant="body2" noWrap sx={{ color: 'text.secondary' }}>{s.tasks_completed}</Typography>
+                        </TableCell>
+                        <TableCell>
+                          {s.blockers?.trim()
+                            ? (
+                              <Tooltip title={s.blockers}>
+                                <Box sx={{ maxWidth: 160 }}><ToneChip tone="danger" label={s.blockers} sx={{ maxWidth: '100%' }} /></Box>
+                              </Tooltip>
+                            )
+                            : <Typography variant="body2" sx={{ color: 'text.disabled' }}>None</Typography>}
+                        </TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell colSpan={7} sx={{ p: 0, borderBottom: open ? undefined : 'none' }}>
+                          <Collapse in={open} unmountOnExit>
+                            <Box sx={{ px: 3, py: 2.25, pl: 9, display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' }, gap: 2.25, bgcolor: tokens.surfaceSunken }}>
+                              {DETAIL_FIELDS.map((f) => (
+                                <Box key={f.key} sx={{ display: 'flex', gap: 1.25, minWidth: 0 }}>
+                                  <f.Icon sx={{ fontSize: 17, mt: '2px', color: f.tone ? tones[f.tone].fg : 'text.disabled' }} />
+                                  <Box sx={{ minWidth: 0 }}>
+                                    <Typography variant="caption" sx={{ color: f.tone ? tones[f.tone].fg : 'text.disabled', fontWeight: 600 }}>{f.label}</Typography>
+                                    <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: s[f.key]?.trim() ? 'text.primary' : 'text.disabled' }}>
+                                      {s[f.key]?.trim() || '—'}
+                                    </Typography>
+                                  </Box>
+                                </Box>
+                              ))}
                             </Box>
-                          ))}
-                        </Box>
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </React.Fragment>
-              ))}
-            </TableBody>
-          </Table>
-        </Paper>
-      )}
+                          </Collapse>
+                        </TableCell>
+                      </TableRow>
+                    </React.Fragment>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+      </Paper>
     </Box>
   );
 };
