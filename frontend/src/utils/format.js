@@ -29,6 +29,12 @@ export const toDate = (value) => {
   return new Date(value);
 };
 
+/** Today as YYYY-MM-DD in the user's own timezone (toISOString would give the UTC date). */
+export const localToday = () => {
+  const d = new Date();
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+};
+
 /** 12 Nov 2026 */
 export const formatDate = (value) => {
   if (!value) return '—';

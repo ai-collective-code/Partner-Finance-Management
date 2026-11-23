@@ -1,5 +1,6 @@
 import jsPDF from 'jspdf';
 import { amountInWords, formatINR } from './generateBillingPdf';
+import { localToday } from './format';
 
 // Builds a clean, professional invoice/receipt PDF from details typed into a form, for
 // submitters who don't have a real invoice document to scan/upload. Returns a File
@@ -35,7 +36,7 @@ export function generateInvoicePdf({
     gstin: from?.gstin || '',
   };
   const billTo = { name: to?.name || toName || 'Ai Collective Finance', detail: to?.detail || '' };
-  const issueDate = date || new Date().toISOString().slice(0, 10);
+  const issueDate = date || localToday();
   const total = Number(amount || 0);
   const gst = Number(gstAmount || 0);
   const base = baseAmount != null && baseAmount !== '' ? Number(baseAmount) : round2(total - gst);

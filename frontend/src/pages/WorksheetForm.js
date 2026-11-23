@@ -11,7 +11,7 @@ import {
 import { useApi } from '../hooks/useApi';
 import { PageHeader, ToneChip, EmptyState, SectionLabel } from '../components/ui';
 import { tokens, tones } from '../theme';
-import { formatDate } from '../utils/format';
+import { formatDate, localToday } from '../utils/format';
 
 export const MOODS = [
   { value: 1, label: 'Rough', Icon: SentimentVeryDissatisfiedRounded, color: '#F87171' },
@@ -20,12 +20,6 @@ export const MOODS = [
   { value: 4, label: 'Good', Icon: SentimentSatisfiedRounded, color: '#34D399' },
   { value: 5, label: 'Great', Icon: SentimentVerySatisfiedRounded, color: '#818CF8' },
 ];
-
-// Today's date in the user's own timezone (toISOString would give the UTC date)
-const localToday = () => {
-  const d = new Date();
-  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-};
 
 const FIELDS = [
   { key: 'tasks_completed', label: 'Done today', placeholder: 'What did you finish?', Icon: CheckCircleOutlineRounded, rows: 3, required: true },

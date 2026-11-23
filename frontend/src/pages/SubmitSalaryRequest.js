@@ -13,7 +13,7 @@ import { generateInvoicePdf } from '../utils/generateInvoicePdf';
 import AuthedFile from '../components/AuthedFile';
 import { PageHeader, SectionCard, ToneChip, ChecklistCard, FileDropZone, EmptyState } from '../components/ui';
 import { tokens, tones } from '../theme';
-import { formatINR, parseMsg } from '../utils/format';
+import { formatINR, parseMsg, localToday } from '../utils/format';
 
 const INDIA_CITIES = {
   "Mumbai": "Maharashtra", "Delhi": "Delhi", "Bengaluru": "Karnataka",
@@ -169,7 +169,7 @@ const SubmitSalaryRequest = () => {
         fromName: employeeName,
         fromDetail: employeeCode ? `Employee ID: ${employeeCode}` : '',
         toName: 'Ai Collective Finance',
-        date: month || new Date().toISOString().slice(0, 10),
+        date: month || localToday(),
         amount: netAmount || parseFloat(baseSalary),
         lineItems: [
           { label: `Base Salary (${month || 'this period'})`, amount: parseFloat(baseSalary) || 0 },
