@@ -415,7 +415,8 @@ async function initPostgres(pgConfig) {
   )`);
   await pool.query('CREATE INDEX IF NOT EXISTS idx_billing_type ON billing_docs(doc_type)');
   // Advance / final invoices: see BILLING_STAGES
-  for (const col of ['billing_stage TEXT', 'advance_amount DOUBLE PRECISION', 'balance_due DOUBLE PRECISION', 'adjusted_advances TEXT', 'adjusted_in TEXT']) {
+  for (const col of ['billing_stage TEXT', 'advance_amount DOUBLE PRECISION', 'balance_due DOUBLE PRECISION', 'adjusted_advances TEXT', 'adjusted_in TEXT',
+    'ref_no TEXT', 'ref_date TEXT', 'po_number TEXT', 'payment_terms TEXT']) {
     await pool.query(`ALTER TABLE billing_docs ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
 
@@ -668,7 +669,8 @@ function initSQLite() {
         created_at TEXT DEFAULT (datetime('now'))
       )`);
       sqliteDb.run('CREATE INDEX IF NOT EXISTS idx_billing_type ON billing_docs(doc_type)');
-      for (const col of ['billing_stage TEXT', 'advance_amount REAL', 'balance_due REAL', 'adjusted_advances TEXT', 'adjusted_in TEXT']) {
+      for (const col of ['billing_stage TEXT', 'advance_amount REAL', 'balance_due REAL', 'adjusted_advances TEXT', 'adjusted_in TEXT',
+        'ref_no TEXT', 'ref_date TEXT', 'po_number TEXT', 'payment_terms TEXT']) {
         sqliteDb.run(`ALTER TABLE billing_docs ADD COLUMN ${col}`, () => {});
       }
 
@@ -2554,6 +2556,11 @@ const billingDocSchema = z.object({
   taxMode: z.enum(['CGST_SGST', 'IGST', 'NONE']),
   taxRate: z.coerce.number().refine(r => BILLING_TAX_RATES.includes(r), 'GST rate must be 0, 5, 12, 18 or 28'),
   notes: z.string().max(2000).optional(),
+  // Printed on the company invoice layout: our estimate/quotation, the client's PO, payment term
+  refNo: z.string().trim().max(60).optional(),
+  refDate: z.string().regex(ISO_DATE_RE, 'Ref date must be YYYY-MM-DD').optional().or(z.literal('')),
+  poNumber: z.string().trim().max(60).optional(),
+  paymentTerms: z.string().trim().max(300).optional(),
   stage: z.enum(Object.keys(BILLING_STAGES)).optional(),
   advanceIds: z.array(z.string().max(64)).max(20).optional(),
 });
@@ -2596,12 +2603,14 @@ async function insertBillingDoc(fields) {
       await dbRunAsync(
         `INSERT INTO billing_docs (id, doc_type, doc_number, project_id, project_code, project_name, client_name, client_address,
           client_gstin, client_state, client_email, client_phone, issue_date, due_date, items, tax_mode, tax_rate, subtotal,
-          tax_amount, total, notes, status, source_id, created_by, created_at, billing_stage, advance_amount, balance_due, adjusted_advances)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          tax_amount, total, notes, status, source_id, created_by, created_at, billing_stage, advance_amount, balance_due, adjusted_advances,
+          ref_no, ref_date, po_number, payment_terms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [row.id, row.doc_type, row.doc_number, row.project_id, row.project_code, row.project_name, row.client_name, row.client_address,
           row.client_gstin, row.client_state, row.client_email, row.client_phone, row.issue_date, row.due_date, row.items, row.tax_mode,
           row.tax_rate, row.subtotal, row.tax_amount, row.total, row.notes, row.status, row.source_id || null, row.created_by, row.created_at,
-          row.billing_stage || 'FULL', row.advance_amount ?? null, row.balance_due ?? null, row.adjusted_advances || null]
+          row.billing_stage || 'FULL', row.advance_amount ?? null, row.balance_due ?? null, row.adjusted_advances || null,
+          row.ref_no || null, row.ref_date || null, row.po_number || null, row.payment_terms || null]
       );
       return formatBillingRow(row);
     } catch (err) {
@@ -2722,6 +2731,10 @@ app.post('/api/billing/docs', authenticateToken, requireRole(...BILLING_ROLES), 
       tax_amount: t.taxAmount,
       total: t.total,
       notes: b.notes || null,
+      ref_no: b.refNo || null,
+      ref_date: b.refDate || null,
+      po_number: b.poNumber || null,
+      payment_terms: b.paymentTerms || null,
       created_by: req.user.id,
       billing_stage: stage,
       advance_amount: stage === 'FINAL' ? advanceAmount : null,
@@ -2757,6 +2770,7 @@ app.post('/api/billing/docs/:id/convert', authenticateToken, requireRole(...BILL
     const doc = await insertBillingDoc({
       ...fields, doc_type: 'INV', issue_date: today, due_date: null, source_id: src.id, created_by: req.user.id,
       billing_stage: 'FULL', advance_amount: null, balance_due: null, adjusted_advances: null,
+      ref_no: src.doc_number, ref_date: src.issue_date, // the invoice refers back to the document it came from
     });
     await dbRunAsync('UPDATE billing_docs SET status = ? WHERE id = ?', ['Accepted', src.id]);
     logger.info({ from: src.doc_number, to: doc.doc_number, by: req.user.id }, 'Billing document converted to invoice');
