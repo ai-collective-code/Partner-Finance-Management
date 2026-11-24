@@ -265,6 +265,17 @@ export default function Billing() {
     ? docs.filter(d => d.project_id === projectId && d.doc_type !== 'INV' && d.status !== 'Cancelled')
     : [];
 
+  // Everything already made on the picked code, oldest first. Only live invoices count towards the
+  // totals; a final invoice counts for its balance, since its advances are listed on their own.
+  const history = projectMode === 'existing' && projectId
+    ? docs.filter(d => d.project_id === projectId).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
+    : [];
+  const payable = (d) => Number(d.billing_stage === 'FINAL' && d.balance_due != null ? d.balance_due : d.total) || 0;
+  const liveInvoices = history.filter(d => d.doc_type === 'INV' && d.status !== 'Cancelled');
+  const historyBilled = round2(liveInvoices.reduce((t, d) => t + payable(d), 0));
+  const historyReceived = round2(liveInvoices.filter(d => d.status === 'Paid').reduce((t, d) => t + payable(d), 0));
+  const fullyBilled = liveInvoices.filter(d => d.billing_stage !== 'ADVANCE').map(d => d.doc_number);
+
   // Say where the GST choice came from, and flag one that doesn't fit the client's state
   const gstMismatch = invStage !== 'ADVANCE' && !!client.state.trim() && gstMode !== stateTaxMode;
   const gstHelp = invStage === 'ADVANCE' ? 'Charged in the final invoice'
@@ -504,6 +515,45 @@ export default function Billing() {
                 </Grid>
               )}
             </SectionCard>
+
+            {projectMode === 'existing' && projectId && (
+              <Paper sx={{ p: 2.5 }} role="region" aria-label="History of this code">
+                <Typography variant="body2" sx={{ fontWeight: 600 }}>History of this code</Typography>
+                {history.length === 0 ? (
+                  <Typography variant="body2" sx={{ color: 'text.disabled', mt: 0.5 }}>
+                    {docsLoading ? 'Loading…' : "Nothing made on this code here yet. Invoices made outside this app aren't listed."}
+                  </Typography>
+                ) : (
+                  <>
+                    <Box sx={{ mt: 1, display: 'grid' }}>
+                      {history.map(d => (
+                        <Box key={d.id} sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', columnGap: 1.5, rowGap: 0.25, py: 0.75, borderBottom: `1px solid ${tokens.border}`, opacity: d.status === 'Cancelled' ? 0.5 : 1 }}>
+                          <Code>{d.doc_number}</Code>
+                          <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+                            {(d.doc_type === 'INV' && (STAGE_NAMES[d.billing_stage] || 'Full invoice')) || typeLabel(d.doc_type)} · {formatDate(d.issue_date)}
+                          </Typography>
+                          <ToneChip tone={STATUS_TONES[d.status] || 'info'} label={d.status} />
+                          <Typography variant="body2" sx={{ ml: 'auto', fontWeight: 560, fontFeatureSettings: '"tnum"' }}>{money(payable(d))}</Typography>
+                        </Box>
+                      ))}
+                    </Box>
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', columnGap: 3, rowGap: 0.5, mt: 1.25, fontFeatureSettings: '"tnum"' }}>
+                      {[['Invoiced', historyBilled], ['Received', historyReceived], ['Still to receive', round2(historyBilled - historyReceived)]].map(([k, v]) => (
+                        <Typography key={k} variant="body2" sx={{ color: 'text.secondary' }}>{k} <Box component="span" sx={{ color: 'text.primary', fontWeight: 600 }}>{money(v)}</Box></Typography>
+                      ))}
+                    </Box>
+                    <Typography variant="caption" sx={{ display: 'block', mt: 0.5, color: 'text.disabled' }}>
+                      GST included. An invoice counts as received once it is marked Paid in Documents.
+                    </Typography>
+                  </>
+                )}
+                {docType === 'INV' && fullyBilled.length > 0 && (
+                  <Alert severity="warning" sx={{ mt: 1.5 }}>
+                    This code already has {fullyBilled.join(', ')} for the whole amount. Another invoice bills the client again.
+                  </Alert>
+                )}
+              </Paper>
+            )}
 
             {advances.length > 0 && (
               <Alert severity={invStage === 'FULL' || unpaidAdvances.length ? 'warning' : 'info'}>
