@@ -157,7 +157,9 @@ export function generateBillingPdf(doc, company = {}) {
     { c: 3, t: 'Rate', b: true, a: 'center' }, { c: 4, t: 'GST %', b: true, a: 'center' }, { c: 5, t: 'Amount', b: true, a: 'center' },
   ]);
   itemHeader();
-  const gstPct = isAdvance || doc.tax_mode === 'NONE' ? '-' : `${Number(doc.tax_rate)}%`;
+  const gstRate = Number(doc.tax_rate);
+  const gstPct = isAdvance || doc.tax_mode === 'NONE' ? '-'
+    : doc.tax_mode === 'CGST_SGST' && gstRate ? `${gstRate / 2}% + ${gstRate / 2}%` : `${gstRate}%`;
   items.forEach((it, i) => {
     const desc = String(it.description || '') + (it.sac ? `\nSAC: ${it.sac}` : '');
     row(items.length === 1 ? 60 : 30, [
@@ -165,7 +167,7 @@ export function generateBillingPdf(doc, company = {}) {
       { c: 1, t: desc, s: 9.5, v: items.length === 1 ? 'top' : 'middle' },
       ...(showQty ? [{ c: 2, t: plain(it.qty), a: 'center', fit: true, s: 10 }] : []),
       { c: 3, t: plain(it.rate), a: 'right', fit: true, s: 10.5 },
-      { c: 4, t: gstPct, a: 'center', s: 10.5 },
+      { c: 4, t: gstPct, a: 'center', fit: true, s: 10.5 },
       { c: 5, t: plain(it.amount), a: 'right', fit: true, s: 10.5 },
     ], itemHeader);
   });
@@ -200,11 +202,10 @@ export function generateBillingPdf(doc, company = {}) {
     // Heading, column names and figures stay on one page
     if (y + 34 + 35 + 26 > BOTTOM) { pdf.addPage([612, PAGE_H]); y = 60; }
     row(34, [label('Detail of Taxes')]);
-    const rate = Number(doc.tax_rate);
     const half = Math.round(Number(doc.tax_amount) * 50) / 100;
     const taxes = doc.tax_mode === 'CGST_SGST'
-      ? [[`CGST ${rate / 2}%`, half], [`SGST ${rate / 2}%`, Number(doc.tax_amount) - half]]
-      : [[`IGST ${rate}%`, doc.tax_amount]];
+      ? [[`CGST ${gstRate / 2}%`, half], [`SGST ${gstRate / 2}%`, Number(doc.tax_amount) - half]]
+      : [[`IGST ${gstRate}%`, doc.tax_amount]];
     row(35, [{ c: 1, t: 'Taxable Value', a: 'center' }, ...taxes.map(([t], i) => ({ c: 2 + i, t, a: 'center' })), { c: 4, t: 'Total', a: 'center' }]);
     row(26, [{ c: 1, t: plain(doc.subtotal), a: 'center', s: 10.5 },
       ...taxes.map(([, v], i) => ({ c: 2 + i, t: plain(v), a: 'center', fit: true, s: 10.5 })),
