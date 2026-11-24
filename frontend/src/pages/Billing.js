@@ -199,6 +199,9 @@ export default function Billing() {
     ? docs.filter(d => d.project_id === projectId && d.doc_type !== 'INV' && d.status !== 'Cancelled')
     : [];
 
+  // GST types with their rates: 18% is CGST 9% + SGST 9%, or IGST 18%
+  const gstLabel = (mode) => (mode === 'IGST' ? `IGST ${Number(taxRate)}%` : `CGST ${Number(taxRate) / 2}% + SGST ${Number(taxRate) / 2}%`);
+
   const aicCode = projectMode === 'existing' ? (selectedProject?.code || '') : newCodePreview;
 
   const setItem = (i, key, value) => setItems(list => list.map((it, idx) => (idx === i ? { ...it, [key]: value } : it)));
@@ -527,10 +530,10 @@ export default function Billing() {
                   {(config?.taxRates || [0, 5, 12, 18, 28]).map(r => <MenuItem key={r} value={r}>{r}%</MenuItem>)}
                 </TextField>
                 <TextField select fullWidth label="GST type" value={taxMode} onChange={e => setTaxMode(e.target.value)} disabled={invStage === 'ADVANCE'}
-                  helperText={invStage === 'ADVANCE' ? 'Charged in the final invoice' : taxMode === 'AUTO' ? `Using ${effectiveTaxMode === 'IGST' ? 'IGST' : 'CGST + SGST'} from the client's state` : ' '}>
+                  helperText={invStage === 'ADVANCE' ? 'Charged in the final invoice' : taxMode === 'AUTO' ? `Using ${gstLabel(effectiveTaxMode)} from the client's state` : ' '}>
                   <MenuItem value="AUTO">Automatic</MenuItem>
-                  <MenuItem value="CGST_SGST">CGST + SGST</MenuItem>
-                  <MenuItem value="IGST">IGST</MenuItem>
+                  <MenuItem value="CGST_SGST">{gstLabel('CGST_SGST')}</MenuItem>
+                  <MenuItem value="IGST">{gstLabel('IGST')}</MenuItem>
                   <MenuItem value="NONE">No GST</MenuItem>
                 </TextField>
                 <TextField fullWidth label="Notes or terms" multiline minRows={2} placeholder="50% advance, balance on delivery"
