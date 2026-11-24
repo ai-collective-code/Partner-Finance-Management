@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Box, Typography, Paper, Grid, TextField, MenuItem, Button, IconButton, Alert,
   Table, TableHead, TableRow, TableCell, TableBody, TableContainer, ToggleButton, ToggleButtonGroup,
-  CircularProgress, Tooltip, Menu, InputAdornment, Skeleton, Checkbox,
+  CircularProgress, Tooltip, Menu, InputAdornment, Skeleton, Checkbox, Autocomplete,
 } from '@mui/material';
 import {
   AddRounded, DeleteOutlineRounded, PictureAsPdfRounded, ReceiptLongRounded, SwapHorizRounded, MoreVertRounded, AutoAwesome,
@@ -29,6 +29,7 @@ const TAG_RE = /^[A-Z][A-Z0-9]{1,5}$/;
 const CLIENT_RE = /^[A-Z]{2,5}$/;
 
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+const emptyRefs = () => ({ refNo: '', refDate: '', poNumber: '', paymentTerms: '' });
 const emptyItem = () => ({ description: '', sac: '', qty: 1, rate: '' });
 
 const STATUS_TONES = { Issued: 'info', Sent: 'accent', Accepted: 'violet', Paid: 'success', Cancelled: 'danger' };
@@ -70,6 +71,7 @@ export default function Billing() {
   const [taxRate, setTaxRate] = useState(18);
   const [taxMode, setTaxMode] = useState('AUTO'); // AUTO picks CGST+SGST vs IGST from the client's state
   const [notes, setNotes] = useState('');
+  const [refs, setRefs] = useState(emptyRefs()); // Ref No, Ref Date, Purchase Order No., Payment Term
   const [stage, setStage] = useState('FULL');
   const [advances, setAdvances] = useState([]); // open advance invoices of the selected project
   const [advanceIds, setAdvanceIds] = useState([]);
@@ -192,6 +194,11 @@ export default function Billing() {
     return { subtotal, rate, tax, total, advance, balance: round2(total - advance) };
   }, [items, taxRate, effectiveTaxMode, isFinal, advances, advanceIds]);
 
+  // Estimates, quotations and proformas of the selected project, offered as the reference
+  const refOptions = projectMode === 'existing' && projectId
+    ? docs.filter(d => d.project_id === projectId && d.doc_type !== 'INV' && d.status !== 'Cancelled')
+    : [];
+
   const aicCode = projectMode === 'existing' ? (selectedProject?.code || '') : newCodePreview;
 
   const setItem = (i, key, value) => setItems(list => list.map((it, idx) => (idx === i ? { ...it, [key]: value } : it)));
@@ -203,6 +210,7 @@ export default function Billing() {
     setClient({ name: '', address: '', gstin: '', state: '', email: '', phone: '' });
     setItems([emptyItem()]);
     setNotes('');
+    setRefs(emptyRefs());
   };
 
   const handleSubmit = async (e) => {
@@ -236,6 +244,7 @@ export default function Billing() {
           taxMode: effectiveTaxMode,
           taxRate: Number(taxRate),
           notes,
+          ...refs,
           stage: invStage,
           ...(isFinal ? { advanceIds } : {}),
         },
@@ -427,8 +436,38 @@ export default function Billing() {
               </Grid>
             </SectionCard>
 
-            {/* ── 4. Items */}
-            <SectionCard step={4} complete={itemsDone} title="Items" description="One line per deliverable. SAC is the GST service code (optional).">
+            {/* ── 4. References */}
+            <SectionCard step={4} complete={!!(refs.refNo.trim() || refs.poNumber.trim())} title="References" description="Printed on the invoice. Leave blank what doesn't apply.">
+              <Grid container spacing={2}>
+                <Grid item xs={12} sm={6}>
+                  <Autocomplete
+                    freeSolo options={refOptions} inputValue={refs.refNo} value={null}
+                    getOptionLabel={o => (typeof o === 'string' ? o : o.doc_number)}
+                    onInputChange={(_, v, reason) => { if (reason !== 'reset') setRefs(r => ({ ...r, refNo: v.slice(0, 60) })); }}
+                    onChange={(_, o) => { if (o && typeof o !== 'string') setRefs(r => ({ ...r, refNo: o.doc_number, refDate: String(o.issue_date).slice(0, 10) })); }}
+                    renderOption={(props, o) => (
+                      <Box component="li" {...props} key={o.id} sx={{ gap: 1 }}>
+                        <Code>{o.doc_number}</Code>
+                        <Typography variant="body2" sx={{ color: 'text.secondary', ml: 'auto' }}>{formatDate(o.issue_date)}</Typography>
+                      </Box>
+                    )}
+                    renderInput={params => <TextField {...params} label="Ref No" placeholder="Estimate or quotation number" />}
+                  />
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <TextField fullWidth type="date" label="Ref date" InputLabelProps={{ shrink: true }} value={refs.refDate} onChange={e => setRefs({ ...refs, refDate: e.target.value })} />
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <TextField fullWidth label="Purchase order no." inputProps={{ maxLength: 60 }} value={refs.poNumber} onChange={e => setRefs({ ...refs, poNumber: e.target.value })} />
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <TextField fullWidth label="Payment term" placeholder="50% advance, balance on delivery" inputProps={{ maxLength: 300 }} value={refs.paymentTerms} onChange={e => setRefs({ ...refs, paymentTerms: e.target.value })} />
+                </Grid>
+              </Grid>
+            </SectionCard>
+
+            {/* ── 5. Items */}
+            <SectionCard step={5} complete={itemsDone} title="Items" description="One line per deliverable. SAC is the GST service code (optional).">
               <Box sx={{ display: 'grid', gap: 1.5 }}>
                 {items.map((it, i) => (
                   <Box key={i} sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr 1fr auto', md: 'minmax(0, 1fr) 110px 80px 130px 110px auto' }, gap: 1.25, alignItems: 'center' }}>
