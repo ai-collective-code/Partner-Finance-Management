@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   Box, Typography, Paper, Grid, TextField, MenuItem, Button, IconButton, Alert,
   Table, TableHead, TableRow, TableCell, TableBody, TableContainer, ToggleButton, ToggleButtonGroup,
@@ -37,8 +37,11 @@ const GST_OPTIONS = [
 ];
 const gstLabel = (mode) => GST_OPTIONS.find(o => o.mode === mode)?.label || '';
 
+const emptyClient = () => ({ name: '', address: '', gstin: '', state: '', email: '', phone: '' });
+const isBlank = (o) => Object.values(o).every(v => !String(v).trim());
 const emptyRefs = () => ({ refNo: '', refDate: '', poNumber: '', paymentTerms: '' });
 const emptyItem = () => ({ description: '', sac: '', qty: 1, rate: '' });
+const DEFAULT_ADVANCE = { by: 'pct', value: '50' }; // by: 'pct' (of the project value) or 'amt' (rupees)
 
 const STATUS_TONES = { Issued: 'info', Sent: 'accent', Accepted: 'violet', Paid: 'success', Cancelled: 'danger' };
 
@@ -46,8 +49,8 @@ const STATUS_TONES = { Issued: 'info', Sent: 'accent', Accepted: 'violet', Paid:
 // on the full project value and deducts the advances already invoiced.
 const STAGES = [
   { code: 'FULL', label: 'Full amount', help: 'One invoice for the whole amount, with GST.' },
-  { code: 'ADVANCE', label: 'Advance', help: 'No GST. The final invoice charges GST on the full project value and deducts this advance.' },
-  { code: 'FINAL', label: 'Final (after advance)', help: 'Enter the full project value. GST is charged on all of it, then the advances you tick are deducted.' },
+  { code: 'ADVANCE', label: 'Advance', help: 'Enter the full project value and how much to bill now. No GST yet. Pick this code again later and the final invoice fills itself in.' },
+  { code: 'FINAL', label: 'Final (after advance)', help: 'GST is charged on the full project value, then the advances you tick are deducted.' },
 ];
 const STAGE_NAMES = { ADVANCE: 'Advance invoice', FINAL: 'Final invoice' };
 const DUE_LABEL = (type) => (type === 'INV' || type === 'PI' ? 'Due date' : 'Valid until');
@@ -74,7 +77,7 @@ export default function Billing() {
   const [npTouched, setNpTouched] = useState({ clientCode: false, projectTag: false });
   const [newCodePreview, setNewCodePreview] = useState('');
 
-  const [client, setClient] = useState({ name: '', address: '', gstin: '', state: '', email: '', phone: '' });
+  const [client, setClient] = useState(emptyClient());
   const [items, setItems] = useState([emptyItem()]);
   const [taxMode, setTaxMode] = useState('AUTO'); // AUTO follows the client's state until one is picked by hand
   const [notes, setNotes] = useState('');
@@ -83,6 +86,11 @@ export default function Billing() {
   const [advances, setAdvances] = useState([]); // open advance invoices of the selected project
   const [advanceIds, setAdvanceIds] = useState([]);
   const [advancesLoading, setAdvancesLoading] = useState(false);
+  const [advancePart, setAdvancePart] = useState(DEFAULT_ADVANCE); // how much of the project value an advance bills
+  // What the form filled in by itself, so it can be replaced when the project changes; typed values are kept
+  const filled = useRef({ projectId: '', client: '', items: '', refs: '', stage: false });
+  const form = useRef({});
+  form.current = { client, items, refs, stage };
 
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState(null);
@@ -160,8 +168,13 @@ export default function Billing() {
 
   // Picking an existing project pre-fills the client from it
   useEffect(() => {
-    if (selectedProject?.partner_name && !client.name) {
-      setClient(c => ({ ...c, name: selectedProject.partner_name, phone: c.phone || selectedProject.partner_phone || '' }));
+    const name = selectedProject?.partner_name || '';
+    if (isBlank(client) || JSON.stringify(client) === filled.current.client) {
+      const next = { ...emptyClient(), name, phone: name ? selectedProject.partner_phone || '' : '' };
+      filled.current.client = JSON.stringify(next);
+      setClient(next);
+    } else if (name && !client.name) {
+      setClient(c => ({ ...c, name, phone: c.phone || selectedProject.partner_phone || '' }));
     }
   }, [projectId]); // eslint-disable-line
 
@@ -172,20 +185,60 @@ export default function Billing() {
   // A final invoice deducts advances, which belong to an existing project
   useEffect(() => { if (isFinal) setProjectMode('existing'); }, [isFinal]);
 
+  // A code with an open advance: switch to the final invoice and fill in the project value, client and
+  // references saved with that advance. Anything typed by hand is left alone.
+  const fillFromAdvances = (list) => {
+    const f = filled.current;
+    const cur = form.current;
+    const auto = {
+      items: cur.items.every(it => !it.description.trim() && !Number(it.rate)) || JSON.stringify(cur.items) === f.items,
+      client: isBlank(cur.client) || JSON.stringify(cur.client) === f.client,
+      refs: isBlank(cur.refs) || JSON.stringify(cur.refs) === f.refs,
+    };
+    const last = list[list.length - 1];
+    const scoped = [...list].reverse().find(a => a.project_items?.length);
+    if (last && cur.stage === 'FULL') { f.stage = true; setStage('FINAL'); }
+    if (!last && f.stage) { f.stage = false; setStage('FULL'); }
+
+    if (auto.items && (scoped || f.items)) {
+      const next = scoped ? scoped.project_items.map(l => ({ description: l.description, sac: l.sac || '', qty: l.qty, rate: l.rate })) : [emptyItem()];
+      f.items = scoped ? JSON.stringify(next) : '';
+      setItems(next);
+    }
+    if (auto.client && last) {
+      const next = {
+        name: last.client_name || '', address: last.client_address || '', gstin: last.client_gstin || '',
+        state: last.client_state || '', email: last.client_email || '', phone: last.client_phone || '',
+      };
+      f.client = JSON.stringify(next);
+      setClient(next);
+    }
+    if (auto.refs && (last || f.refs)) {
+      const next = last ? { refNo: last.ref_no || '', refDate: last.ref_date || '', poNumber: last.po_number || '', paymentTerms: last.payment_terms || '' } : emptyRefs();
+      f.refs = last ? JSON.stringify(next) : '';
+      setRefs(next);
+    }
+  };
+
   // Open advance invoices of the selected project; all ticked by default
+  const advanceProject = docType === 'INV' && projectMode === 'existing' ? projectId : '';
   useEffect(() => {
-    if (!isFinal || !projectId) { setAdvances([]); setAdvanceIds([]); return undefined; }
+    if (!advanceProject) { filled.current.projectId = ''; setAdvances([]); setAdvanceIds([]); return undefined; }
     let cancelled = false;
     setAdvancesLoading(true);
     (async () => {
       try {
-        const res = await apiFetch(`/api/billing/advances?projectId=${encodeURIComponent(projectId)}`);
+        const res = await apiFetch(`/api/billing/advances?projectId=${encodeURIComponent(advanceProject)}`);
         const list = res.ok ? await res.json() : [];
-        if (!cancelled) { setAdvances(list); setAdvanceIds(list.map(a => a.id)); }
+        if (!cancelled) {
+          setAdvances(list);
+          setAdvanceIds(list.map(a => a.id));
+          if (filled.current.projectId !== advanceProject) { filled.current.projectId = advanceProject; fillFromAdvances(list); }
+        }
       } catch { if (!cancelled) { setAdvances([]); setAdvanceIds([]); } } finally { if (!cancelled) setAdvancesLoading(false); }
     })();
     return () => { cancelled = true; };
-  }, [isFinal, projectId, docs]); // eslint-disable-line
+  }, [advanceProject, docs]); // eslint-disable-line
 
   const companyState = (config?.company?.state || '').trim().toLowerCase();
   const stateTaxMode = client.state.trim() && client.state.trim().toLowerCase() !== companyState ? 'IGST' : 'CGST_SGST';
@@ -194,12 +247,18 @@ export default function Billing() {
 
   const totals = useMemo(() => {
     const subtotal = round2(items.reduce((s, it) => s + round2((Number(it.qty) || 0) * (Number(it.rate) || 0)), 0));
+    // An advance bills part of the project value (the items) and no GST
+    const isAdvance = invStage === 'ADVANCE';
+    const part = Number(advancePart.value) || 0;
+    const advanceNow = isAdvance ? round2(advancePart.by === 'pct' ? subtotal * part / 100 : part) : 0;
     const rate = effectiveTaxMode === 'NONE' ? 0 : GST_RATE;
     const tax = round2(subtotal * rate / 100);
-    const total = round2(subtotal + tax);
+    const total = isAdvance ? advanceNow : round2(subtotal + tax);
+    const billed = round2(advances.reduce((s, a) => s + Number(a.total || 0), 0)); // open advances so far
+    const later = round2(subtotal + subtotal * GST_RATE / 100 - billed - advanceNow);
     const advance = isFinal ? round2(advances.filter(a => advanceIds.includes(a.id)).reduce((s, a) => s + Number(a.total || 0), 0)) : 0;
-    return { subtotal, rate, tax, total, advance, balance: round2(total - advance) };
-  }, [items, effectiveTaxMode, isFinal, advances, advanceIds]);
+    return { subtotal, rate, tax, total, advance, advanceNow, billed, later, balance: round2(total - advance) };
+  }, [items, effectiveTaxMode, invStage, isFinal, advances, advanceIds, advancePart]);
 
   // Estimates, quotations and proformas of the selected project, offered as the reference
   const refOptions = projectMode === 'existing' && projectId
@@ -220,7 +279,10 @@ export default function Billing() {
     setProjectId('');
     setNp({ name: '', clientCode: '', projectTag: '', type: 'AD', startDate: todayLocal() });
     setNpTouched({ clientCode: false, projectTag: false });
-    setClient({ name: '', address: '', gstin: '', state: '', email: '', phone: '' });
+    setClient(emptyClient());
+    filled.current = { projectId: '', client: '', items: '', refs: '', stage: false };
+    setStage('FULL');
+    setAdvancePart(DEFAULT_ADVANCE);
     setItems([emptyItem()]);
     setNotes('');
     setRefs(emptyRefs());
@@ -239,6 +301,10 @@ export default function Billing() {
     const cleanItems = items.filter(it => it.description.trim() || Number(it.rate));
     if (!cleanItems.length) { setResult({ type: 'error', msg: 'Add at least one item with a description and rate.' }); return; }
     if (cleanItems.some(it => !it.description.trim())) { setResult({ type: 'error', msg: 'Every item needs a description.' }); return; }
+    if (invStage === 'ADVANCE' && (totals.advanceNow <= 0 || totals.advanceNow > totals.subtotal)) {
+      setResult({ type: 'error', msg: `The advance must be more than 0 and not more than the full project value (${money(totals.subtotal)}).` });
+      return;
+    }
     if (isFinal && totals.advance > totals.total) {
       setResult({ type: 'error', msg: `The advances ticked (${money(totals.advance)}) are more than this invoice's total (${money(totals.total)}). Enter the full project value.` });
       return;
@@ -261,6 +327,7 @@ export default function Billing() {
           ...refs,
           stage: invStage,
           ...(isFinal ? { advanceIds } : {}),
+          ...(invStage === 'ADVANCE' ? { advanceAmount: totals.advanceNow } : {}),
         },
       });
       const data = await res.json();
@@ -313,11 +380,25 @@ export default function Billing() {
     ...(effectiveTaxMode === 'NONE' ? [['GST', invStage === 'ADVANCE' ? 'In final invoice' : 0]] : []),
   ];
   // Summary rows; strings are shown as-is
-  const summaryRows = [
+  const summaryRows = invStage === 'ADVANCE' ? [
+    ['Project value', totals.subtotal],
+    ...(totals.billed ? [['Earlier advances', totals.billed]] : []),
+    ...taxLines,
+    [`To bill later, with ${GST_RATE}% GST`, totals.later],
+  ] : isFinal && totals.advance ? [
+    ['Project value', totals.subtotal],
+    ['Less advances', -totals.advance],
+    ['Balance before GST', round2(totals.subtotal - totals.advance)],
+    ...taxLines.map(([k, v]) => [`${k} on project value`, v]),
+  ] : [
     ['Subtotal', totals.subtotal],
     ...taxLines,
-    ...(isFinal && totals.advance ? [['Invoice total', totals.total], ['Less advances', -totals.advance]] : []),
   ];
+  // What the picked code still has to be billed, from the project value saved with its latest advance
+  const scopedAdvance = [...advances].reverse().find(a => Number(a.project_value) > 0);
+  const projectValue = scopedAdvance ? Number(scopedAdvance.project_value) : 0;
+  const projectGst = round2(projectValue * GST_RATE / 100);
+  const unpaidAdvances = advances.filter(a => a.status !== 'Paid').map(a => a.doc_number);
   const headline = isFinal && totals.advance
     ? { label: 'Balance due', value: totals.balance }
     : { label: `${STAGE_NAMES[invStage] || typeLabel(docType)} total`, value: totals.total };
@@ -360,7 +441,7 @@ export default function Billing() {
                 {docType === 'INV' && (
                   <Grid item xs={12}>
                     <Typography variant="caption" component="div" sx={{ color: 'text.secondary', mb: 1 }}>Invoice for</Typography>
-                    <ToggleButtonGroup size="small" exclusive value={stage} onChange={(_, v) => v && setStage(v)} aria-label="Invoice for"
+                    <ToggleButtonGroup size="small" exclusive value={stage} onChange={(_, v) => { if (v) { filled.current.stage = false; setStage(v); } }} aria-label="Invoice for"
                       sx={{ flexWrap: 'wrap' }}>
                       {STAGES.map(s => <ToggleButton key={s.code} value={s.code} sx={{ whiteSpace: 'nowrap' }}>{s.label}</ToggleButton>)}
                     </ToggleButtonGroup>
@@ -424,6 +505,38 @@ export default function Billing() {
               )}
             </SectionCard>
 
+            {advances.length > 0 && (
+              <Alert severity={invStage === 'FULL' || unpaidAdvances.length ? 'warning' : 'info'}>
+                <Typography variant="body2" sx={{ fontWeight: 600, mb: 0.75 }}>
+                  This code has {advances.length === 1 ? 'an advance' : `${advances.length} advances`} billed: {advances.map(a => a.doc_number).join(', ')}
+                </Typography>
+                {projectValue > 0 ? (
+                  <Box sx={{ display: 'grid', gridTemplateColumns: 'auto auto', columnGap: 3, rowGap: 0.25, width: 'fit-content', fontFeatureSettings: '"tnum"' }}>
+                    {[
+                      ['Project value', money(projectValue)],
+                      ['Advance billed', `− ${money(totals.billed)}`],
+                      ['Balance', money(round2(projectValue - totals.billed))],
+                      [`GST ${GST_RATE}% on project value`, `+ ${money(projectGst)}`],
+                      ['To collect now', money(round2(projectValue + projectGst - totals.billed))],
+                    ].map(([k, v], i, all) => (
+                      <React.Fragment key={k}>
+                        <Typography variant="body2" sx={{ fontWeight: i === all.length - 1 ? 650 : 400 }}>{k}</Typography>
+                        <Typography variant="body2" sx={{ textAlign: 'right', fontWeight: i === all.length - 1 ? 650 : 400 }}>{v}</Typography>
+                      </React.Fragment>
+                    ))}
+                  </Box>
+                ) : (
+                  <Typography variant="body2">Advance billed {money(totals.billed)}. The full project value wasn't saved with it, so enter it in Items.</Typography>
+                )}
+                {unpaidAdvances.length > 0 && (
+                  <Typography variant="body2" sx={{ mt: 0.75 }}>Not marked Paid yet: {unpaidAdvances.join(', ')}. If the client has paid, mark it Paid in Documents.</Typography>
+                )}
+                {invStage === 'FULL' && (
+                  <Typography variant="body2" sx={{ mt: 0.75 }}>A full invoice won't deduct it. Choose "Final (after advance)" to bill the balance.</Typography>
+                )}
+              </Alert>
+            )}
+
             {/* ── 3. Client */}
             <SectionCard step={3} complete={!!client.name.trim()} title="Client" description="Who the document is addressed to. The client's state decides CGST + SGST or IGST.">
               <Grid container spacing={2}>
@@ -455,7 +568,7 @@ export default function Billing() {
               <Grid container spacing={2}>
                 <Grid item xs={12} sm={6}>
                   <Autocomplete
-                    freeSolo options={refOptions} inputValue={refs.refNo} value={null}
+                    freeSolo options={refOptions} componentsProps={{ paper: { sx: { '&:empty': { display: 'none' } } } }} inputValue={refs.refNo} value={null}
                     getOptionLabel={o => (typeof o === 'string' ? o : o.doc_number)}
                     onInputChange={(_, v, reason) => { if (reason !== 'reset') setRefs(r => ({ ...r, refNo: v.slice(0, 60) })); }}
                     onChange={(_, o) => { if (o && typeof o !== 'string') setRefs(r => ({ ...r, refNo: o.doc_number, refDate: String(o.issue_date).slice(0, 10) })); }}
@@ -481,7 +594,8 @@ export default function Billing() {
             </SectionCard>
 
             {/* ── 5. Items */}
-            <SectionCard step={5} complete={itemsDone} title="Items" description="One line per deliverable. SAC is the GST service code (optional).">
+            <SectionCard step={5} complete={itemsDone} title="Items" description="One line per deliverable. SAC is the GST service code (optional)."
+              badge={invStage !== 'FULL' && <ToneChip tone="info" label="Full project value" />}>
               <Box sx={{ display: 'grid', gap: 1.5 }}>
                 {items.map((it, i) => (
                   <Box key={i} sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr 1fr auto', md: 'minmax(0, 1fr) 110px 80px 130px 110px auto' }, gap: 1.25, alignItems: 'center' }}>
@@ -512,7 +626,7 @@ export default function Billing() {
                 <Box sx={{ mt: 3, pt: 3, borderTop: `1px solid ${tokens.border}` }}>
                   <Typography variant="body2" sx={{ fontWeight: 600 }}>Advances to deduct</Typography>
                   <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 1.25 }}>
-                    Advance invoices of this project that aren't in a final invoice yet. Enter the full project value above; these are taken off after GST.
+                    Advance invoices of this project that aren't in a final invoice yet. These are taken off after GST on the full project value.
                   </Typography>
                   {!projectId && <Typography variant="body2" sx={{ color: 'text.disabled' }}>Pick a project to see its advances.</Typography>}
                   {projectId && advancesLoading && <Skeleton height={44} />}
@@ -525,6 +639,7 @@ export default function Billing() {
                         onChange={e => setAdvanceIds(ids => (e.target.checked ? [...ids, a.id] : ids.filter(x => x !== a.id)))} />
                       <Code>{a.doc_number}</Code>
                       <Typography variant="body2" sx={{ color: 'text.secondary' }}>{formatDate(a.issue_date)}</Typography>
+                      <ToneChip tone={STATUS_TONES[a.status] || 'info'} label={a.status} />
                       <Typography variant="body2" sx={{ ml: 'auto', fontWeight: 560, fontFeatureSettings: '"tnum"' }}>{money(a.total)}</Typography>
                     </Box>
                   ))}
@@ -533,9 +648,15 @@ export default function Billing() {
 
               <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2, mt: 3, pt: 3, borderTop: `1px solid ${tokens.border}` }}>
                 {invStage === 'ADVANCE' && (
-                  <Alert severity="info" sx={{ gridColumn: '1 / -1' }}>
-                    No GST on an advance invoice. Make the final invoice for the full project value when the work is done: it charges GST on all of it and deducts this advance.
-                  </Alert>
+                  <>
+                    <TextField fullWidth type="number" label="Advance %" inputProps={{ min: 0, max: 100, step: 'any' }}
+                      value={advancePart.by === 'pct' ? advancePart.value : totals.subtotal ? round2(totals.advanceNow / totals.subtotal * 100) : ''}
+                      onChange={e => setAdvancePart({ by: 'pct', value: e.target.value })} helperText="Of the full project value above" />
+                    <TextField fullWidth type="number" label="Advance amount" inputProps={{ min: 0, step: 'any' }}
+                      value={advancePart.by === 'amt' ? advancePart.value : totals.advanceNow || ''}
+                      onChange={e => setAdvancePart({ by: 'amt', value: e.target.value })} helperText="Billed on this invoice, without GST"
+                      InputProps={{ startAdornment: <InputAdornment position="start">₹</InputAdornment> }} />
+                  </>
                 )}
                 <TextField select fullWidth label="GST" value={gstMode} onChange={e => setTaxMode(e.target.value)} disabled={invStage === 'ADVANCE'}
                   error={gstMismatch} helperText={gstHelp} sx={{ gridColumn: '1 / -1' }}>

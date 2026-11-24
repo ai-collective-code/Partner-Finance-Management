@@ -416,7 +416,7 @@ async function initPostgres(pgConfig) {
   await pool.query('CREATE INDEX IF NOT EXISTS idx_billing_type ON billing_docs(doc_type)');
   // Advance / final invoices: see BILLING_STAGES
   for (const col of ['billing_stage TEXT', 'advance_amount DOUBLE PRECISION', 'balance_due DOUBLE PRECISION', 'adjusted_advances TEXT', 'adjusted_in TEXT',
-    'ref_no TEXT', 'ref_date TEXT', 'po_number TEXT', 'payment_terms TEXT']) {
+    'ref_no TEXT', 'ref_date TEXT', 'po_number TEXT', 'payment_terms TEXT', 'project_value DOUBLE PRECISION', 'project_items TEXT']) {
     await pool.query(`ALTER TABLE billing_docs ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
 
@@ -670,7 +670,7 @@ function initSQLite() {
       )`);
       sqliteDb.run('CREATE INDEX IF NOT EXISTS idx_billing_type ON billing_docs(doc_type)');
       for (const col of ['billing_stage TEXT', 'advance_amount REAL', 'balance_due REAL', 'adjusted_advances TEXT', 'adjusted_in TEXT',
-        'ref_no TEXT', 'ref_date TEXT', 'po_number TEXT', 'payment_terms TEXT']) {
+        'ref_no TEXT', 'ref_date TEXT', 'po_number TEXT', 'payment_terms TEXT', 'project_value REAL', 'project_items TEXT']) {
         sqliteDb.run(`ALTER TABLE billing_docs ADD COLUMN ${col}`, () => {});
       }
 
@@ -2563,6 +2563,8 @@ const billingDocSchema = z.object({
   paymentTerms: z.string().trim().max(300).optional(),
   stage: z.enum(Object.keys(BILLING_STAGES)).optional(),
   advanceIds: z.array(z.string().max(64)).max(20).optional(),
+  // ADVANCE: items hold the full project value and this is the part invoiced now
+  advanceAmount: z.coerce.number().positive('Advance must be more than 0').max(1000000000).optional(),
 });
 
 function formatBillingRow(row) {
@@ -2571,13 +2573,16 @@ function formatBillingRow(row) {
   try { items = JSON.parse(row.items || '[]'); } catch { /* keep empty */ }
   let adjusted_advances = [];
   try { adjusted_advances = JSON.parse(row.adjusted_advances || '[]'); } catch { /* keep empty */ }
-  return { ...row, items, adjusted_advances, billing_stage: row.billing_stage || 'FULL' };
+  let project_items = [];
+  try { project_items = JSON.parse(row.project_items || '[]'); } catch { /* keep empty */ }
+  return { ...row, items, adjusted_advances, project_items, billing_stage: row.billing_stage || 'FULL' };
 }
 
 // Advance invoices of a project that are not cancelled and not yet deducted in a final invoice
 function openAdvances(projectId) {
   return dbAllAsync(
-    `SELECT id, doc_number, issue_date, total FROM billing_docs
+    `SELECT id, doc_number, billing_stage, issue_date, total, status, project_value, project_items, client_name, client_address, client_gstin,
+       client_state, client_email, client_phone, ref_no, ref_date, po_number, payment_terms FROM billing_docs
      WHERE project_id = ? AND doc_type = 'INV' AND billing_stage = 'ADVANCE' AND status != 'Cancelled' AND adjusted_in IS NULL
      ORDER BY issue_date, created_at`,
     [projectId]
@@ -2604,13 +2609,14 @@ async function insertBillingDoc(fields) {
         `INSERT INTO billing_docs (id, doc_type, doc_number, project_id, project_code, project_name, client_name, client_address,
           client_gstin, client_state, client_email, client_phone, issue_date, due_date, items, tax_mode, tax_rate, subtotal,
           tax_amount, total, notes, status, source_id, created_by, created_at, billing_stage, advance_amount, balance_due, adjusted_advances,
-          ref_no, ref_date, po_number, payment_terms)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ref_no, ref_date, po_number, payment_terms, project_value, project_items)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [row.id, row.doc_type, row.doc_number, row.project_id, row.project_code, row.project_name, row.client_name, row.client_address,
           row.client_gstin, row.client_state, row.client_email, row.client_phone, row.issue_date, row.due_date, row.items, row.tax_mode,
           row.tax_rate, row.subtotal, row.tax_amount, row.total, row.notes, row.status, row.source_id || null, row.created_by, row.created_at,
           row.billing_stage || 'FULL', row.advance_amount ?? null, row.balance_due ?? null, row.adjusted_advances || null,
-          row.ref_no || null, row.ref_date || null, row.po_number || null, row.payment_terms || null]
+          row.ref_no || null, row.ref_date || null, row.po_number || null, row.payment_terms || null,
+          row.project_value ?? null, row.project_items || null]
       );
       return formatBillingRow(row);
     } catch (err) {
@@ -2637,7 +2643,7 @@ app.get('/api/billing/advances', authenticateToken, requireRole(...BILLING_ROLES
   try {
     const projectId = String(req.query.projectId || '');
     if (!projectId) return res.status(400).json({ error: 'projectId is required' });
-    res.json(await openAdvances(projectId));
+    res.json((await openAdvances(projectId)).map(formatBillingRow));
   } catch (err) { next(err); }
 });
 
@@ -2678,6 +2684,27 @@ app.get('/api/billing/docs/:id', authenticateToken, requireRole(...BILLING_ROLES
 app.post('/api/billing/docs', authenticateToken, requireRole(...BILLING_ROLES), validate(billingDocSchema), async (req, res, next) => {
   const b = req.validatedBody;
   try {
+    const stage = b.docType === 'INV' ? (b.stage || 'FULL') : 'FULL';
+    // An advance is a part of the full project value, which is kept to fill in the final invoice later
+    let projectScope = null;
+    if (stage === 'ADVANCE' && b.advanceAmount !== undefined) {
+      const full = computeTotals(b.items, 'NONE', 0);
+      const amount = round2(b.advanceAmount);
+      if (amount > full.subtotal) {
+        return res.status(400).json({ error: `The advance (Rs. ${amount}) is more than the full project value (Rs. ${full.subtotal}).` });
+      }
+      const pct = round2((amount / full.subtotal) * 100);
+      const sacs = [...new Set(full.lines.map(l => l.sac))];
+      projectScope = {
+        value: full.subtotal,
+        lines: full.lines,
+        items: [{
+          description: `Advance (${pct}%): ${full.lines.map(l => l.description).join('; ')}`.slice(0, 300),
+          sac: sacs.length === 1 ? sacs[0] : '', qty: 1, rate: amount,
+        }],
+      };
+    }
+
     // Resolve the project — an existing one, or a new one created here with its own AiC code
     let project = null;
     if (b.projectId) {
@@ -2691,13 +2718,12 @@ app.post('/api/billing/docs', authenticateToken, requireRole(...BILLING_ROLES), 
       return res.status(400).json({ error: 'Pick a project or create a new one (needed for the AiC code)' });
     }
 
-    const stage = b.docType === 'INV' ? (b.stage || 'FULL') : 'FULL';
     if (stage === 'FINAL' && !b.projectId) {
       return res.status(400).json({ error: 'A final invoice needs an existing project, so its advance invoices can be found.' });
     }
     // Advance invoices carry no GST; GST is charged on the full value in the final invoice
     const taxMode = stage === 'ADVANCE' ? 'NONE' : b.taxMode;
-    const t = computeTotals(b.items, taxMode, stage === 'ADVANCE' ? 0 : b.taxRate);
+    const t = computeTotals(projectScope ? projectScope.items : b.items, taxMode, stage === 'ADVANCE' ? 0 : b.taxRate);
 
     let advances = [];
     if (stage === 'FINAL') {
@@ -2735,6 +2761,8 @@ app.post('/api/billing/docs', authenticateToken, requireRole(...BILLING_ROLES), 
       ref_date: b.refDate || null,
       po_number: b.poNumber || null,
       payment_terms: b.paymentTerms || null,
+      project_value: projectScope ? projectScope.value : null,
+      project_items: projectScope ? JSON.stringify(projectScope.lines) : null,
       created_by: req.user.id,
       billing_stage: stage,
       advance_amount: stage === 'FINAL' ? advanceAmount : null,
@@ -2769,7 +2797,7 @@ app.post('/api/billing/docs/:id/convert', authenticateToken, requireRole(...BILL
     const { id, doc_number, status, created_at, created_by, ...fields } = src; // eslint-disable-line no-unused-vars
     const doc = await insertBillingDoc({
       ...fields, doc_type: 'INV', issue_date: today, due_date: null, source_id: src.id, created_by: req.user.id,
-      billing_stage: 'FULL', advance_amount: null, balance_due: null, adjusted_advances: null,
+      billing_stage: 'FULL', advance_amount: null, balance_due: null, adjusted_advances: null, project_value: null, project_items: null,
       ref_no: src.doc_number, ref_date: src.issue_date, // the invoice refers back to the document it came from
     });
     await dbRunAsync('UPDATE billing_docs SET status = ? WHERE id = ?', ['Accepted', src.id]);
