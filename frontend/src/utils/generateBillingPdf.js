@@ -196,7 +196,7 @@ export function generateBillingPdf(doc, company = {}) {
   if (isAdvance) {
     row(40, [label('Detail of Taxes'), {
       c: 1, span: 5, s: 8.5,
-      t: 'GST is not charged on this advance. GST on the full project value is charged in the final invoice, which deducts this advance.',
+      t: `${doc.project_value ? `Full project value ${plain(doc.project_value)} (before GST). ` : ''}GST is not charged on this advance. GST on the full project value is charged in the final invoice, which deducts this advance.`,
     }]);
   } else if (doc.tax_mode !== 'NONE') {
     // Heading, column names and figures stay on one page
