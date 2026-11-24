@@ -29,6 +29,14 @@ const TAG_RE = /^[A-Z][A-Z0-9]{1,5}$/;
 const CLIENT_RE = /^[A-Z]{2,5}$/;
 
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+// GST is always 18%: one IGST for other states, or 9% CGST + 9% SGST in our own state
+const GST_RATE = 18;
+const GST_OPTIONS = [
+  { mode: 'IGST', label: `${GST_RATE}% (IGST)` },
+  { mode: 'CGST_SGST', label: `${GST_RATE / 2}% + ${GST_RATE / 2}% (CGST + SGST)` },
+];
+const gstLabel = (mode) => GST_OPTIONS.find(o => o.mode === mode)?.label || '';
+
 const emptyRefs = () => ({ refNo: '', refDate: '', poNumber: '', paymentTerms: '' });
 const emptyItem = () => ({ description: '', sac: '', qty: 1, rate: '' });
 
@@ -68,8 +76,7 @@ export default function Billing() {
 
   const [client, setClient] = useState({ name: '', address: '', gstin: '', state: '', email: '', phone: '' });
   const [items, setItems] = useState([emptyItem()]);
-  const [taxRate, setTaxRate] = useState(18);
-  const [taxMode, setTaxMode] = useState('AUTO'); // AUTO picks CGST+SGST vs IGST from the client's state
+  const [taxMode, setTaxMode] = useState('AUTO'); // AUTO follows the client's state until one is picked by hand
   const [notes, setNotes] = useState('');
   const [refs, setRefs] = useState(emptyRefs()); // Ref No, Ref Date, Purchase Order No., Payment Term
   const [stage, setStage] = useState('FULL');
@@ -181,26 +188,29 @@ export default function Billing() {
   }, [isFinal, projectId, docs]); // eslint-disable-line
 
   const companyState = (config?.company?.state || '').trim().toLowerCase();
-  const effectiveTaxMode = invStage === 'ADVANCE' ? 'NONE'
-    : taxMode !== 'AUTO' ? taxMode
-    : (client.state.trim() && client.state.trim().toLowerCase() !== companyState ? 'IGST' : 'CGST_SGST');
+  const stateTaxMode = client.state.trim() && client.state.trim().toLowerCase() !== companyState ? 'IGST' : 'CGST_SGST';
+  const gstMode = taxMode === 'AUTO' ? stateTaxMode : taxMode;
+  const effectiveTaxMode = invStage === 'ADVANCE' ? 'NONE' : gstMode; // an advance carries no GST
 
   const totals = useMemo(() => {
     const subtotal = round2(items.reduce((s, it) => s + round2((Number(it.qty) || 0) * (Number(it.rate) || 0)), 0));
-    const rate = effectiveTaxMode === 'NONE' ? 0 : Number(taxRate);
+    const rate = effectiveTaxMode === 'NONE' ? 0 : GST_RATE;
     const tax = round2(subtotal * rate / 100);
     const total = round2(subtotal + tax);
     const advance = isFinal ? round2(advances.filter(a => advanceIds.includes(a.id)).reduce((s, a) => s + Number(a.total || 0), 0)) : 0;
     return { subtotal, rate, tax, total, advance, balance: round2(total - advance) };
-  }, [items, taxRate, effectiveTaxMode, isFinal, advances, advanceIds]);
+  }, [items, effectiveTaxMode, isFinal, advances, advanceIds]);
 
   // Estimates, quotations and proformas of the selected project, offered as the reference
   const refOptions = projectMode === 'existing' && projectId
     ? docs.filter(d => d.project_id === projectId && d.doc_type !== 'INV' && d.status !== 'Cancelled')
     : [];
 
-  // GST types with their rates: 18% is CGST 9% + SGST 9%, or IGST 18%
-  const gstLabel = (mode) => (mode === 'IGST' ? `IGST ${Number(taxRate)}%` : `CGST ${Number(taxRate) / 2}% + SGST ${Number(taxRate) / 2}%`);
+  // Say where the GST choice came from, and flag one that doesn't fit the client's state
+  const gstMismatch = invStage !== 'ADVANCE' && !!client.state.trim() && gstMode !== stateTaxMode;
+  const gstHelp = invStage === 'ADVANCE' ? 'Charged in the final invoice'
+    : gstMismatch ? `Client's state is ${client.state.trim()}, which normally takes ${gstLabel(stateTaxMode)}`
+    : taxMode === 'AUTO' ? (client.state.trim() ? "Chosen from the client's state" : "Enter the client's state to choose this automatically") : ' ';
 
   const aicCode = projectMode === 'existing' ? (selectedProject?.code || '') : newCodePreview;
 
@@ -214,6 +224,7 @@ export default function Billing() {
     setItems([emptyItem()]);
     setNotes('');
     setRefs(emptyRefs());
+    setTaxMode('AUTO');
   };
 
   const handleSubmit = async (e) => {
@@ -245,7 +256,7 @@ export default function Billing() {
           client,
           items: cleanItems.map(it => ({ description: it.description, sac: it.sac, qty: Number(it.qty) || 0, rate: Number(it.rate) || 0 })),
           taxMode: effectiveTaxMode,
-          taxRate: Number(taxRate),
+          taxRate: GST_RATE,
           notes,
           ...refs,
           stage: invStage,
@@ -526,15 +537,9 @@ export default function Billing() {
                     No GST on an advance invoice. Make the final invoice for the full project value when the work is done: it charges GST on all of it and deducts this advance.
                   </Alert>
                 )}
-                <TextField select fullWidth label="GST rate" value={taxRate} onChange={e => setTaxRate(e.target.value)} disabled={invStage === 'ADVANCE'}>
-                  {(config?.taxRates || [0, 5, 12, 18, 28]).map(r => <MenuItem key={r} value={r}>{r}%</MenuItem>)}
-                </TextField>
-                <TextField select fullWidth label="GST type" value={taxMode} onChange={e => setTaxMode(e.target.value)} disabled={invStage === 'ADVANCE'}
-                  helperText={invStage === 'ADVANCE' ? 'Charged in the final invoice' : taxMode === 'AUTO' ? `Using ${gstLabel(effectiveTaxMode)} from the client's state` : ' '}>
-                  <MenuItem value="AUTO">Automatic</MenuItem>
-                  <MenuItem value="CGST_SGST">{gstLabel('CGST_SGST')}</MenuItem>
-                  <MenuItem value="IGST">{gstLabel('IGST')}</MenuItem>
-                  <MenuItem value="NONE">No GST</MenuItem>
+                <TextField select fullWidth label="GST" value={gstMode} onChange={e => setTaxMode(e.target.value)} disabled={invStage === 'ADVANCE'}
+                  error={gstMismatch} helperText={gstHelp} sx={{ gridColumn: '1 / -1' }}>
+                  {GST_OPTIONS.map(o => <MenuItem key={o.mode} value={o.mode}>{o.label}</MenuItem>)}
                 </TextField>
                 <TextField fullWidth label="Notes or terms" multiline minRows={2} placeholder="50% advance, balance on delivery"
                   value={notes} onChange={e => setNotes(e.target.value)} sx={{ gridColumn: '1 / -1' }} helperText="Optional. Printed on the document." />
